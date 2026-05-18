@@ -89,8 +89,9 @@ for (i in seq_len(nrow(search))) {
       cik    = str_pad(as.character(cik), width = 10, pad = "0"),
       filed  = ymd(filed),
       period = as.integer(period),
-      fy     = suppressWarnings(as.integer(fy))
-    )
+      across(any_of("fy"), ~ suppressWarnings(as.integer(.)))
+    ) |>
+    (\(df) if (!"fy" %in% names(df)) mutate(df, fy = NA_integer_) else df)()
 
   # --- Resolve parent vs. dimensioned values ---
   num_parent <- num_filtered |> filter(dimh == "0x00000000")
@@ -138,7 +139,8 @@ write_parquet(all_raw, glue("{data_path}xbrl_tsv_scf_tags_raw.parquet"))
 # Reload from parquet if starting here (skipping the Section 4 loop)
 all_raw <- read_parquet(glue("{data_path}xbrl_tsv_scf_tags_raw.parquet")) |>
   mutate(start = as.Date(start), end = as.Date(end), filed = as.Date(filed),
-         fy    = as.integer(fy))
+         across(any_of("fy"), as.integer)) |>
+  (\(df) if (!"fy" %in% names(df)) mutate(df, fy = NA_integer_) else df)()
 
 # Filter to annual/quarterly periods; drop instantaneous rows (qtrs == 0 → start NA)
 tag_annual <- all_raw |>
@@ -181,7 +183,13 @@ tag_comp_wide <- tag_annual_dedup |>
   pivot_wider(id_cols     = c(cik, tag, start, end),
               names_from  = comp_n,
               values_from = c(val, change_amt),
-              names_glue  = "{.value}_p{comp_n}")
+              names_glue  = "{.value}_p{comp_n}") |>
+  (\(df) {
+    for (col in setdiff(c("val_p1", "change_amt_p1", "val_p2", "change_amt_p2"), names(df))) {
+      df[[col]] <- NA_real_
+    }
+    df
+  })()
 
 # Amendments: 10-K/A or 10-Q/A filings filed after original
 tag_amend_summary <- tag_annual_dedup |>
@@ -198,31 +206,92 @@ tag_amend_summary <- tag_annual_dedup |>
             any_change_in_amend = if_else(any(val_changed), 1L, 0L),
             .groups = "drop")
 
-# Join and compute correction indicators
+# Disaggregation: tags appearing in comparative filings that were never the
+# current-period tag in the original filing for that (cik, start, end)
+orig_period_date <- tag_original |>
+  group_by(cik, start, end) |>
+  summarise(min_filing_date = min(filing_date), .groups = "drop")
+
+new_comp_tags <- tag_annual_dedup |>
+  filter(!is_current_period, form %in% c("10-K", "10-Q")) |>
+  inner_join(orig_period_date, by = c("cik", "start", "end")) |>
+  filter(filed > min_filing_date) |>
+  anti_join(tag_original, by = c("cik", "tag", "start", "end")) |>
+  group_by(cik, tag, start, end) |>
+  arrange(filed, accn, .by_group = TRUE) |>
+  slice(1) |>
+  ungroup()
+
+period_new_tags <- new_comp_tags |>
+  group_by(cik, start, end) |>
+  summarise(
+    has_new_tags     = TRUE,
+    n_new_tags       = n_distinct(tag),
+    sum_new_tag_vals = sum(val, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Period-level filing metadata for borrowing into new-tag rows
+period_original_meta <- tag_original |>
+  group_by(cik, start, end) |>
+  arrange(filing_date, filing_accn, .by_group = TRUE) |>
+  slice(1) |>
+  ungroup() |>
+  select(cik, start, end, filing_accn, filing_date, filing_form, fy)
+
+# Join and compute correction indicators for originally-filed tags
 scf_tags <- tag_original |>
   left_join(tag_comp_wide,     by = c("cik", "tag", "start", "end")) |>
   left_join(tag_amend_summary, by = c("cik", "tag", "start", "end")) |>
+  left_join(period_new_tags,   by = c("cik", "start", "end")) |>
   mutate(
+    is_sign_flip        = coalesce(coalesce(val_p2, val_p1) == -original_val, FALSE),
     any_revision        = as.integer(
-      coalesce(change_amt_p1 != 0, FALSE) |
-      coalesce(change_amt_p2 != 0, FALSE)),
+      (coalesce(change_amt_p1 != 0, FALSE) |
+       coalesce(change_amt_p2 != 0, FALSE)) &
+      !is_sign_flip),
     any_amendment       = replace_na(any_amendment,       0L),
     any_change_in_amend = replace_na(any_change_in_amend, 0L),
+    has_new_tags        = coalesce(has_new_tags, FALSE),
+    likely_disaggregation = (
+      any_revision == 1L &
+      has_new_tags &
+      coalesce(change_amt_p1, 0) < 0
+    ),
     best_val = case_when(
       any_change_in_amend == 1L ~ first_amend_val,
+      likely_disaggregation     ~ original_val,
       any_revision        == 1L ~ coalesce(val_p2, val_p1),
       TRUE                      ~ original_val),
     correction = case_when(
       any_change_in_amend == 1L ~ "Amendment",
+      likely_disaggregation     ~ "Reclassification",
+      is_sign_flip              ~ "Sign Flip",
       any_revision        == 1L ~ "Revision",
-      TRUE                      ~ "None")
+      TRUE                      ~ "None"),
+    change_amt = best_val - original_val
   ) |>
   select(cik, filing_accn, filing_date, filing_form, fy, start, end, tag,
-         original_val, best_val,
-         val_p1, change_amt_p1,
-         val_p2, change_amt_p2,
-         first_amend_val, change_amt_amend,
-         any_revision, any_amendment, any_change_in_amend, correction) |>
+         original_val, best_val, change_amt,
+         has_new_tags, likely_disaggregation, is_sign_flip, correction)
+
+# Rows for newly disaggregated tags: appear in comparative but not in original filing.
+# original_val is NA; val_p1 carries the first comparative value.
+new_tag_rows <- new_comp_tags |>
+  select(-any_of("fy")) |>
+  left_join(period_original_meta, by = c("cik", "start", "end")) |>
+  transmute(
+    cik, filing_accn, filing_date, filing_form, fy, start, end, tag,
+    original_val          = 0,
+    best_val              = val,
+    change_amt            = val,
+    has_new_tags          = TRUE,
+    likely_disaggregation = FALSE,
+    is_sign_flip          = FALSE,
+    correction            = "Disaggregated"
+  )
+
+scf_tags <- bind_rows(scf_tags, new_tag_rows) |>
   arrange(cik, end, tag)
 
 
@@ -233,3 +302,9 @@ cat("Saved xbrl_scf_tags.parquet:", nrow(scf_tags), "rows,",
     n_distinct(scf_tags$tag), "distinct tags\n")
 
 data <- read_parquet(glue("{data_path}xbrl_scf_tags.parquet"))
+
+test <- data |> filter(cik=="0000104169",end=='2011-07-31')
+
+
+test_xbrl <- read_tsv(glue("{raw_data_path}2012_Q3_num.tsv")) |> 
+  filter(adsh=="0000104169-12-000014")
