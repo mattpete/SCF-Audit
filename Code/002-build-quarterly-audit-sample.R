@@ -10,8 +10,10 @@ library(lubridate)
 library(readxl)
 library(tidyr)
 
-setwd("C:/Users/mnp4/Dropbox/Cash Flow Audit Idea/Code")
-data_path <- "C:/Users/mnp4/Dropbox/Cash Flow Audit Idea/Data/"
+#define data paths and load functions
+raw_data_path <- Sys.getenv('XBRL_DATA_PATH')
+data_path     <- Sys.getenv('DATA_PATH')
+source("code/000-utilities-functions.R")
 
 #Start with Restatements-------------------------------------------------
 #Downloaded this csv dataset from Audit Analytics

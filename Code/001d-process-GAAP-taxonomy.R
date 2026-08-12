@@ -8,10 +8,10 @@ library(lubridate)
 library(readr)
 library(readxl)
 
-
-setwd("C:/Users/mnp4/Dropbox/Cash Flow Audit Idea/Code")
-raw_data_path <- "D:/XBRL/XBRL Extracted Data/"
-data_path     <- "C:/Users/mnp4/Dropbox/Cash Flow Audit Idea/Data/"
+#define data paths and load functions
+raw_data_path <- Sys.getenv('XBRL_DATA_PATH')
+data_path     <- Sys.getenv('DATA_PATH')
+source("code/000-utilities-functions.R")
 
 # 2. Load GAAP Taxonomy ----------------------------------------------------------
 taxonomy_raw <- read_excel(glue("{data_path}GAAP_Taxonomy.xlsx"), sheet = "Presentation")
@@ -301,10 +301,20 @@ cat("Saved xbrl_scf_tags.parquet:", nrow(scf_tags), "rows,",
     n_distinct(scf_tags$cik), "distinct CIKs,",
     n_distinct(scf_tags$tag), "distinct tags\n")
 
-data <- read_parquet(glue("{data_path}xbrl_scf_tags.parquet"))
+xbrl_data <- read_parquet(glue("{data_path}xbrl_scf_tags.parquet"))
 
-test <- data |> filter(cik=="0000104169",end=='2011-07-31')
+test <- xbrl_data |> filter(cik=="0000104169",end=='2011-07-31')
+test <- xbrl_data |> filter(cik=="0000104169",end=="2012-01-31")
 
 
-test_xbrl <- read_tsv(glue("{raw_data_path}2012_Q3_num.tsv")) |> 
-  filter(adsh=="0000104169-12-000014")
+
+test_xbrl <- read_tsv(glue("{raw_data_path}2012_Q1_num.tsv")) |> 
+  filter(adsh=="0001193125-12-134679")
+
+
+
+test_xbrl2 <- read_tsv(glue("{raw_data_path}2014_Q1_num.tsv")) |> 
+  filter(adsh=="0000104169-14-000019")
+
+
+
