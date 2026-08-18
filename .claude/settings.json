@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Program Files/R/R-4.5.3/bin/Rscript.exe\" \"C:/Users/MNPETE~1/AppData/Local/Temp/claude/c--Users-mnpeterson-Git-SCF-Audit/472c104f-f592-4617-815d-43c308f714d2/scratchpad/explore.R\")"
+    ]
+  }
+}

@@ -303,7 +303,7 @@ cat("Saved xbrl_scf_tags.parquet:", nrow(scf_tags), "rows,",
 
 xbrl_data <- read_parquet(glue("{data_path}xbrl_scf_tags.parquet"))
 
-test <- xbrl_data |> filter(cik=="0000104169",end=='2011-07-31')
+test <- xbrl_data |> filter(cik=="0000831001")
 test <- xbrl_data |> filter(cik=="0000104169",end=="2012-01-31")
 
 
