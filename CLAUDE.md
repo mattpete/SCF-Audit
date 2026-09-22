@@ -130,6 +130,22 @@ Three constraints the data forced, each after a failed attempt — do not undo t
 
 **Era flags** (on the period output) mark periods that are not clean evidence: 17.6% are `early XBRL phase-in` (FY≤2012), 7.1% `censored right edge` (FY≥2022, where the panel simply lacks later filings to serve as comparatives), leaving 75.3% `clean`. Whether to exclude the early-XBRL era is still an open decision; it is flagged separately from FASB-driven changes on purpose.
 
+### Hand-audit summary (`002b-build-filing-audit-summary.R`)
+
+Collapses the pipeline to **one row per filing-period** (267,282 rows × 61 cols) so a case can be checked against the actual SEC filing by hand. Carries company name, fiscal year/period, both anchor filing dates and accession numbers, **EDGAR index URLs** for the original/comparative/amendment filings, the three section totals as filed and as latest presented, the change, the standard-driven portion, the unexplained residual, per-section changed flags and tag counts, and a readable string of every changed tag with its before/after amounts and standard attribution.
+
+Grain note: one row per filing 99% of the time — 264,477 distinct filings produce 267,282 periods, because 2,769 filings anchor 2–3 periods (typically a 10-K covering both its annual period and a Q4). `n_periods_this_filing` flags those so they are not mistaken for duplicates.
+
+Company name and `fp` do **not** survive `001e` (which carries only `cik`/`sic`/`afs`), so `002b` rebuilds them from the raw `sub` files.
+
+All amounts are RAW DOLLARS as tagged, so they tie to a filing without rescaling; only the `*_changed_tags` strings use $ thousands for readability.
+
+**It also writes two ready-made audit samples** (`audit_sample_changed.csv`, `audit_sample_unchanged.csv`; n = 120 each, fixed seed), drawn only from testable, clean-era periods — a case that fails the pipeline's own quality gates is not a fair test of whether the summary is accurate. Pool: 120,985 periods (15,874 changed / 105,111 unchanged). Population split overall: **83.3% of filing-periods show no section change, 16.7% do**; of the changed ones, 3,337 are fully explained by a standard and 41,174 retain an unexplained residual.
+
+Worked examples from the sample, showing the kind of thing an audit should confirm:
+- *Weis Markets FY2016* — `Depreciation` (66,496) and `AmortizationOfIntangibleAssets` (10,366) both go to zero while `DepreciationDepletionAndAmortization` appears at 76,862, i.e. exactly their sum: a 2-into-1 tag consolidation netting to zero. CFO still moves 2,517, correctly traced to a different line (receivables/prepaid).
+- *SunCoke Energy Partners Q1 2017* — CFI moves 100, sole changed tag `IncreaseDecreaseInRestrictedCash`, correctly attributed to ASU 2016-18 and leaving no residual.
+
 ### Running `001e` (config at the top of the script)
 
 The script has two phases with **separate scopes**, which is the single most important thing to understand before running it:
