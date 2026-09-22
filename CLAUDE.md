@@ -216,7 +216,31 @@ Work here is sequenced in two dependent phases — do not skip ahead to phase 2 
    - *Early-XBRL tagging churn (2010–2012)* — e.g. `OtherNoncashIncomeExpense` spiking in 2010–11 as users grow 137%, `AdjustmentsNoncashItems...` dying in 2012 (473 → 18 users). That is XBRL phase-in by filer size and taxonomy cleanup, not accounting. Open question: flag with the same reason code as ASUs or a separate one — "the taxonomy changed" is a weaker exclusion than "the FASB required this", and a referee may want them reported separately.
    - *Right-edge censoring (2022–23)* — `ProceedsFromIssuanceInitialPublicOffering` (−58%), `ProceedsFromIssuanceOfPrivatePlacement` (−57%), `RepaymentsOfRelatedPartyDebt` (−51%) appear to "die" in 2022. They have not: the extract stops at 2023_M12, so recent periods have fewer later filings available to serve as comparatives. **This argues for truncating the panel before 2022 regardless of Phase 2.**
 
-   Proposed deliverable when picked up: `002a-flag-standard-driven-changes.R`, adding a `standard_driven` reason code to each `scf_line_changes` row from two layers — a curated reference table (including the standards found above) plus the empirical detector kept in-code for extensibility.
+   **Concept clustering works as a discovery method.** Splitting tag names on CamelCase into unigrams and adjacent bigrams, then looking for term-years where the change rate spikes above that term's own baseline, recovers every standard above and dates it — with no reference list as input. The year-by-year narrative it produces: FY2011 taxes/impairment (early-XBRL phase-in), FY2012 stock options/business combinations (taxonomy churn), **FY2015 excess benefit** (2016-09), **FY2017 securities/restricted/deferred revenue** (2016-01, 2016-18, 606), **FY2018 customer/contract** (606), **FY2020–21 lease/right-of-use** (842). Keep this in-code; it is how the list stays current past 2023.
+
+   **Timing: the ASU signal lands on the periods whose comparatives were restated, NOT the adoption year.** Excess tax benefits spike in FY2015 — a year before ASU 2016-09 was even issued — because a firm adopting in FY2017 retrospectively restates its FY2015–16 comparatives, and `001e` compares "FY2015 as originally filed" against "FY2015 as shown in the latest filing". Exclusion windows must therefore span roughly *adoption year − 2 through adoption year*, keyed off where the rate actually spikes rather than the effective date.
+
+   **Section-level impact, measured (this is what should drive the design):**
+
+   | standard | tags | firm-periods | % section moved | median share of move | intra | cross | net-chg | threatening periods |
+   |---|---|---|---|---|---|---|---|---|
+   | ASU 2016-09 | 16 | 7,103 | 58.8% | **1.00** | 44.0% | **32.6%** | 23.5% | 3,980 |
+   | ASU 2016-18 | 434 | 9,836 | 61.9% | **1.00** | 31.1% | 6.5% | **62.4%** | 6,781 |
+   | ASC 606 | 408 | 15,586 | 31.8% | 0.50 | **59.4%** | 5.8% | 34.8% | 6,327 |
+   | ASC 842 | 3,163 | 29,560 | 25.2% | 0.73 | **70.8%** | 9.3% | 19.9% | **8,618** |
+
+   Two things this settles:
+   - **Per change**, 2016-09 and 2016-18 are the severe ones: the section moves ~60% of the time and the tag is the *sole* driver (median share 1.00). For 606 and 842 the section moves only a quarter to a third of the time and the tag explains half to three-quarters.
+   - **By volume the ranking flips.** ASC 842 touches 29,560 firm-periods — 4× ASU 2016-09 — so despite the low per-change rate it yields the most threatening periods (8,618). An earlier triage dismissed 842 and 606 as "within-section, low priority"; that was wrong on volume.
+
+   **Each standard threatens a different outcome variable**, which is why a single blanket flag would be the wrong design:
+   - **ASU 2016-09 → cross-section reclassification** (32.6% cross-section, triple any other). The only one genuinely moving cash between sections, so the direct threat to the project's core claim.
+   - **ASU 2016-18 → net change in cash** (62.4%). Folding restricted cash into the cash total changes the total, not its classification.
+   - **ASC 606 and ASC 842 → predominantly intra-section** (59% / 71%). They contaminate tag-level descriptive counts far more than section-level results — the same exposure as the tags-proxy-for-line-items caveat above.
+
+   Across all four, ~25,700 threatening periods before overlap, against 267,282 total — order of 10% potentially ASU-contaminated.
+
+   **Revised deliverable:** `002a-flag-standard-driven-changes.R` should record **which standard** and **what kind of impact** per affected row, not one `standard_driven` boolean, so exclusions can be applied per outcome variable instead of discarding periods that are harmless to the test at hand. Two layers as before: a curated reference table (tag × year-window, windows set from observed spikes) plus the concept detector retained in-code. Still open: whether early-XBRL taxonomy churn (FY2011–12) gets the same reason code as FASB-driven changes, or a separate, weaker one.
 
 ## Working with this repo
 
@@ -224,3 +248,4 @@ Work here is sequenced in two dependent phases — do not skip ahead to phase 2 
 - **`001e-identify-scf-line-changes.R` is the actively maintained script.** Make changes to the original/comparative/amendment detection there. `001d` is preserved as a fallback and should not be edited without the user's say-so; the JSON lineage (`001`, `001b`) and `002 Create FS from XBRL data.R` are earlier iterations kept for reference.
 - `002-build-quarterly-audit-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`, **not** `001e`'s output. Repointing it at `scf_period_summary.parquet` is future work and will need the join logic revisited, since the grain and column names differ.
 - Every non-obvious rule in `001e` was derived from a specific filing that broke a simpler rule, and the counter-example is cited in the comment beside it. Before "simplifying" any of them — the conditional income-block collapse, the per-line sign resolution, the `cf_periods` restriction — check the cited case, because the obvious simplification is usually what was tried first and found wrong.
+- **Tooling gotcha:** writing an R script via a Bash heredoc in this environment collapses `\\1` to `\1`, so regex backreferences in a replacement string silently become control characters `\x01`/`\x02` — which corrupts output in ways that look like data problems (words losing their first and last letters) rather than a quoting bug. Either use the Write tool for scripts containing backreferences, or avoid them: zero-width lookarounds with a plain replacement work, e.g. `gsub("(?<=[a-z0-9])(?=[A-Z])", " ", x, perl = TRUE)` to split CamelCase.
