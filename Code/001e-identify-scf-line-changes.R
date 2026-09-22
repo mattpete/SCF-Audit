@@ -179,13 +179,33 @@ search <- bind_rows(
 
 
 # 4. Helper: assign each presented line to a cash flow section -----------------
-# Within one filing's cash flow statement the lines run in presentation order:
-#   ...operating lines... [operating subtotal]
-#   ...investing lines... [investing subtotal]
-#   ...financing lines... [financing subtotal]
-#   [FX effect, net change in cash, opening/closing balances, supplemental]
-# so a line belongs to the first section whose subtotal appears at or after it.
-# Lines below the financing subtotal are "other" (not part of any section).
+# A section's subtotal closes that section, so a line belongs to the FIRST
+# subtotal appearing at or after it, in document order. Lines after the last
+# subtotal are "other" (FX effect, net change in cash, opening/closing balances,
+# supplemental disclosures).
+#
+# An earlier version demanded all three subtotals AND a strict
+# operating -> investing -> financing sequence, setting `section = NA` for every
+# line of any filing that failed either test. Measured on the full population
+# that discarded 37,465 filings (11.05% of them, 5.38% of all lines) for three
+# distinct reasons, none of which justify throwing the filing away:
+#
+#   1. A subtotal is simply absent -- 25,481 filings tag operating and financing
+#      but no investing subtotal, plus ~8,800 other partial combinations. Their
+#      operating lines were perfectly assignable.
+#   2. The canonical order is not universal -- 2,083 filings present financing
+#      BEFORE investing. A subtotal still closes its own section wherever it
+#      sits, so no fixed sequence should be assumed.
+#   3. 867 filings satisfied op < inv < fin and were still rejected, because
+#      `max(line)` picks up a subtotal presented twice and pushes it past the
+#      next anchor.
+#
+# So: no canonical order is assumed, and whatever anchors exist are used. What a
+# missing anchor genuinely costs is certainty about the boundary it would have
+# drawn -- if the investing subtotal is absent, investing lines are
+# indistinguishable from financing ones. Those filings are still assigned, but
+# flagged `section_ambiguous` so they can be excluded knowingly rather than
+# silently guessed at or silently dropped.
 assign_sections <- function(pre_cf) {
   anchors <- pre_cf |>
     filter(tag %in% ALL_SUBTOTAL_TAGS) |>
@@ -196,29 +216,35 @@ assign_sections <- function(pre_cf) {
     # where both the plain and ContinuingOperations totals appear, the later
     # line closes the section
     group_by(adsh, report, sect) |>
-    summarise(anchor_line = max(line), .groups = "drop") |>
-    pivot_wider(names_from = sect, values_from = anchor_line,
-                names_prefix = "ln_")
+    summarise(anchor_line = max(line), .groups = "drop")
 
-  for (nm in c("ln_operating", "ln_investing", "ln_financing")) {
-    if (!nm %in% names(anchors)) anchors[[nm]] <- NA_integer_
-  }
+  n_anch <- anchors |> count(adsh, report, name = "n_anchors")
+
+  pre_cf <- pre_cf |> mutate(.rid = row_number())
+
+  # first anchor at or after each line, in document order
+  assigned <- pre_cf |>
+    select(.rid, adsh, report, line) |>
+    inner_join(anchors, by = c("adsh", "report"), relationship = "many-to-many") |>
+    filter(line <= anchor_line) |>
+    arrange(.rid, anchor_line) |>
+    distinct(.rid, .keep_all = TRUE) |>
+    select(.rid, sect)
 
   pre_cf |>
-    inner_join(anchors, by = c("adsh", "report")) |>
+    left_join(assigned, by = ".rid") |>
+    left_join(n_anch,   by = c("adsh", "report")) |>
     mutate(
-      # only trust the ordering when the three sections appear in the expected
-      # sequence; otherwise leave section NA so the filing can be reviewed
-      order_ok = !is.na(ln_operating) & !is.na(ln_investing) & !is.na(ln_financing) &
-                 ln_operating < ln_investing & ln_investing < ln_financing,
-      section = case_when(
-        !order_ok            ~ NA_character_,
-        line <= ln_operating ~ "operating",
-        line <= ln_investing ~ "investing",
-        line <= ln_financing ~ "financing",
-        TRUE                 ~ "other"),
+      n_anchors   = coalesce(n_anchors, 0L),
+      # no anchor at or after the line => it sits below the last subtotal
+      section     = coalesce(sect, "other"),
+      # a missing subtotal means at least one boundary is unknown
+      section_ambiguous = n_anchors < 3L,
+      # retained under its original name for continuity; now means
+      # "all three sections anchored, so boundaries are certain"
+      order_ok    = !section_ambiguous,
       is_subtotal = tag %in% ALL_SUBTOTAL_TAGS) |>
-    select(-starts_with("ln_"))
+    select(-.rid, -sect)
 }
 
 
@@ -410,7 +436,8 @@ for (i in seq_len(nrow(search))) {
       value_raw = value,
       value     = if_else(negating == 1L, -value_raw, value_raw)) |>
     select(cik, accn = adsh, form, fp, fy, filed, sic, afs, report, line, tag,
-           plabel, prole, negating, section, is_subtotal, order_ok, ddate, qtrs,
+           plabel, prole, negating, section, is_subtotal, n_anchors,
+           section_ambiguous, order_ok, ddate, qtrs,
            start, end, value_raw, value, is_current_period)
 
   if (nrow(lines) > 0) write_parquet(lines, glue("{lines_dir}{yr}_{pd}.parquet"))
@@ -538,8 +565,8 @@ anchor_accns <- unique(na.omit(c(anchors$orig_accn, anchors$comp_accn,
 
 scf_lines <- open_dataset(lines_dir) |>
   filter(accn %in% anchor_accns) |>
-  select(cik, accn, tag, plabel, section, is_subtotal, line, start, end,
-         value_raw, negating, value) |>
+  select(cik, accn, tag, plabel, section, is_subtotal, section_ambiguous,
+         line, start, end, value_raw, negating, value) |>
   collect() |>
   mutate(start = as.Date(start), end = as.Date(end))
 
@@ -708,8 +735,17 @@ compare_channel <- function(o_lines, r_lines, keys) {
     left_join(o_foot, by = c("cik", "start", "end", "section")) |>
     left_join(r_foot, by = c("cik", "start", "end", "section")) |>
     mutate(
-      orig_section_foots = coalesce(orig_section_foots, TRUE),
-      rev_section_foots  = coalesce(rev_section_foots,  TRUE),
+      # Unknown footing must NOT count as footing. `section_foots()` drops rows
+      # whose section is "other" or NA, so a side contributing no rows for this
+      # section yields no footing row at all -- defaulting that to TRUE (as an
+      # earlier version did) declared the section a fair reconciliation test when
+      # footing was never established, and inflated the pass denominator. The
+      # visible symptom was sections where the subtotal moved while not one
+      # component changed: one side supplied components via the other side's
+      # section label but no subtotal of its own, so the subtotal read as an
+      # "Added" value from zero (Ryder FY2018 investing, a $2.8bn phantom).
+      orig_section_foots = coalesce(orig_section_foots, FALSE),
+      rev_section_foots  = coalesce(rev_section_foots,  FALSE),
       negating_changed = in_original & in_revised &
                          coalesce(o_neg != r_neg, FALSE),
       # each filing's value as it displays it
@@ -844,10 +880,34 @@ section_footing <- scf_line_changes |>
             comp_section_foots = all(comp_section_foots), .groups = "drop") |>
   mutate(both_sides_foot = orig_section_foots & comp_section_foots)
 
+# Whether any filing involved lacked a section subtotal, leaving a boundary
+# uncertain (see assign_sections). Reconciliation cannot be trusted for these
+# even when both sides foot, because lines of a missing section are pooled into
+# the neighbouring one.
+# Only the filings actually used as anchors for a period count -- a filing can
+# appear in scf_lines for a period it merely re-presents without being that
+# period's anchor, and its boundary certainty is irrelevant there.
+anchor_pairs <- bind_rows(
+    anchors |> transmute(cik, start, end, accn = orig_accn),
+    anchors |> transmute(cik, start, end, accn = comp_accn),
+    anchors |> transmute(cik, start, end, accn = amend_accn)) |>
+  filter(!is.na(accn)) |> distinct()
+
+section_ambiguity <- scf_lines |>
+  filter(!is.na(section), section != "other") |>
+  semi_join(anchor_pairs, by = c("cik", "start", "end", "accn")) |>
+  group_by(cik, start, end, section) |>
+  summarise(section_ambiguous = any(section_ambiguous), .groups = "drop")
+
 scf_section_changes <- section_subtotals |>
   full_join(section_components, by = c("cik", "start", "end", "section")) |>
   left_join(section_footing,    by = c("cik", "start", "end", "section")) |>
+  left_join(section_ambiguity,  by = c("cik", "start", "end", "section")) |>
   mutate(across(where(is.numeric), ~ coalesce(.x, 0)),
+         section_ambiguous = coalesce(section_ambiguous, TRUE),
+         # a fair reconciliation test needs both sides verified AND unambiguous
+         # section boundaries
+         recon_testable = both_sides_foot & !section_ambiguous,
          recon_diff = component_difference - subtotal_difference,
          recon_ok   = abs(recon_diff) < 1,
          amend_recon_diff = component_amend_difference - subtotal_amend_difference,
@@ -935,11 +995,18 @@ print(scf_period_summary |> count(correction_channel))
 cat("\nReconciliation diagnostic (component diffs vs subtotal diff):\n")
 print(scf_section_changes |> count(section, recon_ok))
 
-# A section can only be expected to reconcile if BOTH filings' own cash flow
-# statements foot. Where they do, a reconciliation failure means this script is
-# missing a line; where they do not, the filing's own XBRL is defective.
+# A section is a fair reconciliation test only if BOTH filings' own cash flow
+# statements foot AND the section boundaries are unambiguous. Where it is
+# testable, a failure means this script is missing a line; where it is not, the
+# filing's own XBRL is defective or a subtotal it needed was never tagged.
 cat("\nReconciliation vs whether both filings' own statements foot:\n")
 print(scf_section_changes |> count(both_sides_foot, recon_ok))
+
+cat("\nSection-boundary certainty (a missing subtotal leaves a boundary unknown):\n")
+print(scf_section_changes |> count(section_ambiguous))
+
+cat("\nReconciliation on TESTABLE sections only (both foot + unambiguous):\n")
+print(scf_section_changes |> count(recon_testable, recon_ok))
 
 
 # 10. Walmart validation -------------------------------------------------------

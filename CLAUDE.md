@@ -18,6 +18,23 @@ The hypothesis: there are many undisclosed SCF reclassifications, and where issu
 
 This is why `001e` tracks the **disclosed** channel (10-K/A, 10-Q/A amendments) separately from the **silent** channel (a figure quietly changing in a later filing's comparative column), and why it works at the individual line-item level: a reclassification recharacterizes *where* a cash flow appears without moving the reported total, so a standard "did net income change" restatement screen misses it entirely. Akorn's Q2/Q3 2014 10-Q/A is the pattern in miniature — a formally disclosed amendment that restated several operating line items while leaving CFO exactly unchanged.
 
+### The headline descriptive claim
+
+The punchiest available result is at the **statement level**: what proportion of cash flow statements carry a revision that was never disclosed — the figures changed in a later filing's comparative column with no amendment, so the event never enters Audit Analytics at all. That is direct evidence of how prevalent undisclosed SCF revision is, and it is what the `correction_channel` silent-vs-disclosed split exists to support.
+
+Note this claim is **robust to the tag-versus-line-item caveat below**, because it is binary per statement — did this SCF change, and was it disclosed? It does not require knowing how many individual line items moved.
+
+### Measurement caveat: tags proxy for line items (OPEN — deliberately not settled)
+
+`001e` observes changes in XBRL **tags**, which only proxy for changes in **line items**. A filer can retag the same line with a different element and nothing economic changes — `IncreaseDecreaseInDeferredRevenue` → `IncreaseDecreaseInContractWithCustomerLiability` under ASC 606, or `RepaymentsOfLongTermCapitalLeaseObligations` → `FinanceLeasePrincipalPayments` under ASC 842. The slippage runs one way: **tag-level counts overstate line-item changes.**
+
+Scope it correctly rather than caveating everything. It affects descriptive *tag-level* counts ("N line items were revised"); it does **not** affect the section-level CFO/CFI/CFF measures that carry the actual tests, because a rename inside a section nets to zero and leaves the subtotal untouched — which the reconciliation check verifies directly. Section-level outcomes are therefore primary; tag-level detail is diagnostic (identifying *why* a section moved, so ASU-driven causes can be excluded).
+
+**Left open on purpose.** Three routes to tightening it are preserved and need no re-extraction:
+- `is_tag_substitution` already flags equal-value renames, so any tag-level count can be reported with and without them — a one-line robustness check.
+- `plabel` (the filer's own line label) is carried through the extract; label similarity would separate a relabel from a genuine presentation change.
+- `GAAP_Taxonomy.xlsx` (the `Elements` and `References` sheets, never yet opened) and the per-period `tag.tsv` files may carry FASB deprecation/replacement data. If so, renames of standard elements become an authoritative lookup rather than a fuzzy match, leaving only company-specific extension tags to heuristics.
+
 ## Commands
 
 - Open `SCF-Audit.Rproj` in RStudio and run scripts by sourcing them or executing line-by-line — there is no CLI build/lint/test entrypoint.
@@ -45,7 +62,7 @@ The `Code/` scripts are numbered by pipeline stage, but there are two parallel/s
 Detects changes between the SCF **as originally filed** and the SCF **as later re-presented as a prior-period comparative**, at the individual line-item level. Key design decisions, each of which fixes a specific failure mode found while validating against Walmart:
 
 - **SCF membership comes from `pre` (`stmt == "CF"`), not the GAAP taxonomy.** Taxonomy-role filtering (what `001d` does) silently drops tags a filer borrowed from another statement's taxonomy section. This is the source of the `"missing?"` entries in `Examples.xlsx` — both resolve to standard `us-gaap` tags (`RepaymentsOfLongTermCapitalLeaseObligations`, `OtherNoncashIncomeExpense`) that `001d` misses.
-- **Section assignment** is derived per filing from presentation ordering relative to the three section subtotal tags, so every presented line is attributed to operating/investing/financing.
+- **Section assignment** is derived per filing from presentation order: a subtotal closes its own section, so each line takes the first subtotal at or after it. **No canonical operating → investing → financing order is assumed**, and whatever anchors exist are used. An earlier version demanded all three subtotals in strict sequence and set `section = NA` for every line of any filing that failed — discarding 37,465 filings (11.05%) for three unrelated reasons: a subtotal merely absent (25,481 tag operating + financing but no investing), financing legitimately presented *before* investing (2,083), and 867 that satisfied the order yet were rejected because `max(line)` picked up a twice-presented subtotal. What a missing anchor really costs is certainty about the boundary it would have drawn, so those filings are now assigned **and** flagged `section_ambiguous` (34,277 filings, 10.1%) rather than silently dropped. `section = NA` no longer occurs.
 - **Anchored on three specific filings**, not aggregated across comparatives:
   - `orig_*` — earliest regular 10-K/10-Q presenting the period as its own current period ("as filed").
   - `comp_*` — the **last** regular filing to re-present it as a prior-period comparative. The **silent** channel: the number changes with no amendment and often no disclosure. Last is used per the project convention that it is the final attestation of correct presentation.
@@ -63,7 +80,7 @@ Detects changes between the SCF **as originally filed** and the SCF **as later r
 - **Tag substitution** (a line relabelled to a different element at the same amount) is flagged, not counted as an economic change.
 - The GAAP taxonomy **Calculation linkbase was evaluated and rejected** for identifying aggregates: it describes the standard hierarchy, not the filer's, and mislabels ordinary leaf lines (e.g. `IncreaseDecreaseInAccruedLiabilities`) as aggregates.
 
-**Reconciliation is the coverage test**, per the project's own logic: within a section, component differences must sum to the subtotal difference. It is only a fair test when both filings' own cash flow statements foot, which `both_sides_foot` records. Where they foot and reconciliation still fails, the script is missing a line; where they don't, the filing's own XBRL is defective — itself a finding. A confirmed example: Walmart's Q2 FY2019 10-Q omits `ProceedsFromIssuanceOfLongTermDebt` (15,851M) from its tagged SCF entirely — the value exists in `num` but `pre` assigns it to a note, not `stmt == "CF"`, and the statement jumps from short-term debt straight to repayments.
+**Reconciliation is the coverage test**, per the project's own logic: within a section, component differences must sum to the subtotal difference. It is only a fair test when both filings' own statements foot **and** the section boundaries are unambiguous — `recon_testable = both_sides_foot & !section_ambiguous` is that gate. Note `section_foots()` drops rows whose section is `other`/`NA`, so a side contributing no rows for a section yields no footing row at all; unknown footing must therefore default to **FALSE**. Defaulting it to TRUE (as an earlier version did) declared sections fair tests when footing was never established and inflated the pass denominator — the visible symptom was sections whose subtotal moved while not one component changed (Ryder FY2018 investing: the original supplied components via the comparative's section label but no subtotal of its own, so the subtotal read as a $2.8bn "Added" from zero). Where they foot and reconciliation still fails, the script is missing a line; where they don't, the filing's own XBRL is defective — itself a finding. A confirmed example: Walmart's Q2 FY2019 10-Q omits `ProceedsFromIssuanceOfLongTermDebt` (15,851M) from its tagged SCF entirely — the value exists in `num` but `pre` assigns it to a note, not `stmt == "CF"`, and the statement jumps from short-term debt straight to repayments.
 
 **Validation status (Walmart + Akorn, 86 company-periods, 258 sections):**
 - Reproduces every line item and amount in `Examples.xlsx` for Walmart FY2012–FY2016, all 15 section-periods reconciling exactly.
@@ -142,22 +159,31 @@ Every pipeline script (`001`, `001b`, `001c`, `001d`) repeats the same restateme
 
 A general-purpose R helper library sourced by other scripts, not specific to any one pipeline stage: variable transforms (`winsorize_x`, `truncate_x`, `standardize_x`), Fama-French 12/49 industry classification from SIC codes (`assign_FF12`, `assign_FF49`), logistic regression holdout/performance helpers built for `rsample`/`broom` workflows, LaTeX/`modelsummary` formatting helpers, and an event-study trading-day window function (`trading_day_window`). Also sets global R options (no scientific notation, `America/New_York` timezone for date handling).
 
-## Current status (as of 2026-08-14)
+## Current status (as of 2026-09-22)
 
-**Where we are:** `001e` is built and validated on two companies. The **first full-population extraction** was kicked off from RStudio with `TARGET_CIKS <- NULL` and `RESUME <- FALSE` (the one-time reset needed to change extraction scope). Expected runtime ~10–15 minutes; it writes ~86 parquet parts covering roughly 30M SCF line rows.
+**Full population extracted and analysed, with the section-assignment fixes applied.** Run took 32.95 min end to end (extract rebuild + analysis), 14.4 GB peak on a 127 GB machine — comfortably in memory, no chunking needed.
 
-**Immediately after the extract finishes**, in order:
-1. Confirm the extract completed — `scf_lines_parts_done.csv` should list all 86 expected periods. If the run was interrupted, just re-run with `RESUME <- TRUE`; the completeness gate stops before the analysis if anything is missing.
-2. Run the analysis with `ANALYSIS_CIKS <- c("0000104169", "0000003116")` as a **regression check** — Walmart's 15 annual section-periods must all reconcile with `recon_diff == 0`, reproducing `Examples.xlsx`.
-3. Run a ~300-CIK random sample (set `ANALYSIS_CIKS` to a sample of the extracted CIKs) for broad reconciliation rates, then the full population.
+| | |
+|---|---|
+| Extract | 85 parts, 13,961 CIKs, 339,054 filings, 21.1M SCF line rows |
+| Company-periods with a correction channel | 267,288 (265,107 comparative, 7,740 amendment) |
+| Outputs | `scf_line_changes_full.parquet` (170 MB, 8.9M rows), `scf_section_changes_full.parquet` (23 MB, 768,903), `scf_period_summary_full.parquet` (6.8 MB, 267,282) |
 
-**Open questions the broad run should answer** — none of these have been seen in two clean industrial filers:
-- How often is `order_ok == FALSE` (sections not in the expected operating → investing → financing order)? Those lines currently get `section = NA`.
-- How many filings present **no** CF section subtotals at all? Those are silently dropped by the `cf_periods` restriction and should be counted.
-- What share of sections have `both_sides_foot == FALSE`? That is the only place reconciliation fails, and it drives the exclude/flag/hand-review decision below.
-- Does the analysis phase fit in memory at full scale? If not, chunk it via `ANALYSIS_CIKS` over CIK batches — the extract does not need redoing.
+**Reconciliation after the fixes** — on testable sections (both sides foot, boundaries unambiguous): **600,144 pass / 3,024 fail = 99.50%**. Before the fixes the comparable figure was 14,174 failures at 2.27%. Most of that "failure" population was the `coalesce(footing, TRUE)` bug manufacturing fair tests that weren't, plus filings whose sections had been discarded wholesale. 51,398 sections (6.7%) are quarantined as `section_ambiguous`; 118,453 have a side that does not foot.
 
-**Known stale item:** the header comment block at the top of `001e` still describes the earlier two-anchor design (it mentions two anchor filings, a single `negating` rule, and a `scf_lines_raw.parquet` output). The body of the script is current; the header needs a refresh.
+**Walmart regression still exact** — all 15 annual section-periods at `recon_diff = 0`, reproducing `Examples.xlsx`.
+
+**Answered by the broad run:**
+- `order_ok == FALSE` affected 11.05% of filings and is now fixed — `section = NA` no longer occurs at all (was 5.38% of lines); ~944k lines recovered into real sections.
+- Analysis fits in memory at full scale (14.4 GB), so `ANALYSIS_CIKS` chunking is unnecessary.
+- The failure gradient is filer-quality, not a mechanism: pre-fix rates ran 0.46% (large accelerated) to 5.46% (smaller reporting), a 12× spread, with over-represented tags being related-party debt, warrants and derivative liabilities. Discontinued operations was tested and **ruled out** — sections containing any discontinued-ops tag failed at 1.77%, *below* baseline.
+
+**Next up:**
+1. Re-examine the residual 3,024 testable failures, prioritising large accelerated / accelerated filers — the only ones likely to survive sample screens.
+2. Decide how to treat `both_sides_foot == FALSE` (118,453 sections) and `section_ambiguous` (51,398): exclude, flag, or hand-review. Non-footing SCF tagging may itself be evidence for the thesis.
+3. Then Phase 2 (ASU exclusion list).
+
+**Known stale items:** the header comment block at the top of `001e` still describes the earlier two-anchor design (two anchor filings, a single `negating` rule, a `scf_lines_raw.parquet` output) — the body is current. The 451 MB of parts still sit in Dropbox and will sync to coauthors despite being rebuildable in ~31 min.
 
 ## Roadmap / open tasks
 
@@ -170,7 +196,27 @@ Work here is sequenced in two dependent phases — do not skip ahead to phase 2 
 
    Why tag-level, not section-level: you cannot just take the change in a section's total (e.g. operating cash flow as originally filed vs. as later reported in a comparative-period filing) and call that a misstatement. That net delta conflates true misstatements with legitimate, standard-driven reclassifications — e.g. ASU 2016-09 moved excess tax benefits from share-based comp from financing to operating for essentially every filer in the same adoption window, which would look identical to a misstatement if you only looked at the CFO section total. Only by tracking which *individual tags* changed within a section can phase 2 later distinguish the two.
 
-2. **Phase 2 (blocked on phase 1): standard-driven reclassification exclusion list.** Once tag-level change detection in phase 1 is trustworthy, build an exhaustive reference list of specific tags/years driven by known accounting standard updates (e.g. ASU 2016-09 excess tax benefit tags, ASU 2016-15's eight targeted classification issues, ASU 2016-18 restricted cash) and use it to exclude/flag those changes, isolating true misstatements from standard-driven reclassifications. This phase operates on the tag-level output phase 1 produces, so its design may depend on exactly what phase 1's output schema looks like — expect this to spawn further sub-tasks once phase 1 is done.
+2. **Phase 2 (started — exploratory findings below, nothing built yet): standard-driven reclassification exclusion list.** Build a reference list of tags/years driven by accounting standard updates and use it to exclude/flag those changes, isolating true misstatements from standard-driven reclassifications.
+
+   **Method that works: empirical wave detection.** A standard-driven reclassification hits many filers in the same window with the same tag, so it shows up as a year where a tag's change rate spikes far above its own baseline, usually paired with the tag being abruptly abandoned or born. Idiosyncratic misstatements are diffuse. This was validated against known answers and then found standards that were *not* on the original list — so it should stay in-code as a detector rather than being frozen into a hand-written list, which also matters for extending past 2023.
+
+   **Waves confirmed** (ranked by excess firms affected in the peak year):
+
+   | standard | signature | peak |
+   |---|---|---|
+   | **ASC 606 / ASU 2014-09** (revenue) | `IncreaseDecreaseInDeferredRevenue` rate 0.26 → 0.67; `IncreaseDecreaseInContractWithCustomerLiability` born 1 → 1,099 users | FY2017, **569 firms** |
+   | **ASU 2016-09** (excess tax benefits) | both `ExcessTaxBenefit...Operating/FinancingActivities` spike FY2015–16 then die (1,298 → 42 users) | FY2016, 254 + 166 |
+   | **ASU 2016-01** (financial instruments) | `PaymentsToAcquireAvailableForSaleSecuritiesDebt` / `ProceedsFromSale...Debt` appear (debt/equity split) | FY2017, 206 + 135 |
+   | **ASU 2016-18** (restricted cash) | `IncreaseDecreaseInRestrictedCash` rate → 0.78, users −80% | FY2017, 182 |
+   | **ASC 842** (leases) | `RepaymentsOfLongTermCapitalLeaseObligations` → `FinanceLeasePrincipalPayments` / `OperatingLeaseRightOfUseAsset...` | FY2018–20, 175 + 155 |
+
+   **ASC 606 is the single largest confound in the data** and was not in the original plan. **ASU 2016-15 shows no wave at all** — its eight targeted issues are either too rare or land in tags that do not move.
+
+   **Two non-ASU classes the detector also surfaces, which must be excluded for different reasons:**
+   - *Early-XBRL tagging churn (2010–2012)* — e.g. `OtherNoncashIncomeExpense` spiking in 2010–11 as users grow 137%, `AdjustmentsNoncashItems...` dying in 2012 (473 → 18 users). That is XBRL phase-in by filer size and taxonomy cleanup, not accounting. Open question: flag with the same reason code as ASUs or a separate one — "the taxonomy changed" is a weaker exclusion than "the FASB required this", and a referee may want them reported separately.
+   - *Right-edge censoring (2022–23)* — `ProceedsFromIssuanceInitialPublicOffering` (−58%), `ProceedsFromIssuanceOfPrivatePlacement` (−57%), `RepaymentsOfRelatedPartyDebt` (−51%) appear to "die" in 2022. They have not: the extract stops at 2023_M12, so recent periods have fewer later filings available to serve as comparatives. **This argues for truncating the panel before 2022 regardless of Phase 2.**
+
+   Proposed deliverable when picked up: `002a-flag-standard-driven-changes.R`, adding a `standard_driven` reason code to each `scf_line_changes` row from two layers — a curated reference table (including the standards found above) plus the empirical detector kept in-code for extensibility.
 
 ## Working with this repo
 
