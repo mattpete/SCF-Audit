@@ -56,6 +56,7 @@ The `Code/` scripts are numbered by pipeline stage, but there are two parallel/s
   - `001d` is the most refined script: instead of a hardcoded tag list, it derives the target SCF tags dynamically from `GAAP_Taxonomy.xlsx` (Presentation sheet), filtered to Statement-of-Cash-Flows-related `definition` values (covers standard, deposit-based, insurance-based, securities-based, REIT, and direct-method SCF variants). This makes tag coverage taxonomy-driven rather than a fixed list, and adds reclassification/disaggregation detection (see below) that the earlier scripts lack.
   - `002 Create FS from XBRL data.R` is a separate, broader/earlier exploration that builds full financial statements (BS/IS/CF/EQ) from the raw `num`/`tag`/`pre`/`sub` files rather than isolating specific SCF tags — largely scratch/validation code exploring the raw file structure.
 - **Current script for Phase 1: `001e-identify-scf-line-changes.R`.** Supersedes `001d` for line-item change detection (`001d` is preserved as a fallback). See "Phase 1 detection design" below.
+- **Current script for Phase 2: `002a-flag-standard-driven-changes.R`.** Consumes `001e`'s output, attributes changes to the accounting standards that required them, and subtracts them to leave an unexplained residual per section. See "Phase 2 design" below.
 
 ### Phase 1 detection design (`001e`)
 
@@ -104,6 +105,30 @@ Detects changes between the SCF **as originally filed** and the SCF **as later r
 `difference = orig_val − comp_val` (as-filed minus subsequent, matching `Examples.xlsx`).
 
 Practical path: filter `scf_period_summary` for interesting periods → drop to `scf_line_changes` to see which tags drove it (what Phase 2 needs) → `scf_lines_parts/` to inspect a filing as filed.
+
+### Phase 2 design (`002a-flag-standard-driven-changes.R`)
+
+Attributes changed SCF line items to the standards that required them, sums what each standard accounts for within a section, and subtracts it:
+
+```
+unexplained_difference = subtotal_difference - standard_applied
+```
+
+Each of the five standards in the `STANDARDS` reference table carries an inline comment block: what it changed, its SCF impact, the nominal effective date, the window observed in our data, and the measured section-level impact. Attribution records **which standard and what kind of impact**, not one boolean, because the standards threaten different outcome variables (see the measured table under Phase 2 in the roadmap). **ASU 2016-15 is deliberately absent** — the detector found no wave in any of its tags, so including it on theory alone would delete genuine revisions.
+
+Three constraints the data forced, each after a failed attempt — do not undo them without re-reading the cited case:
+
+1. **Patterns must match BOTH sides of a rename.** Matching only the new tag leaves the offsetting old-tag change unattributed, so the pair stops netting to zero and subtracting manufactures a residual in a section that never moved. This is why ASU 2016-01 matches `AvailableForSaleSecurities` rather than only the `Debt`/`Equity` variants, and why ASC 606 lists `DeferredRevenue` alongside the contract-liability tags. The cost is breadth, traded against narrow windows.
+2. **The adjustment may only explain movement away, never create it.** A plain `subtotal - standard` pushed 12,592 periods from "intra-section reclass" to "net cash flow change" — backwards. The attributed amount is applied only in the direction of the observed movement and capped at its size (`std_applied`). Four sanity checks in the script assert this: zero residuals exceeding the original move, zero sign flips, zero flat sections made to move, and the raw decomposition `standard + other = subtotal` exact on all reconciling sections.
+3. **Windows must be tight, and a disclosed correction overrides attribution.** With a window starting FY2014, **Akorn FY2014** (`restatement_key` 48887 — a documented restatement) came back "explained by standard" with a zero residual: a real misstatement erased by a standard not yet issued. Windows are now bounded by the issuance date *and* the three-year comparative reach of a 10-K (an FY2017 adopter can restate FY2015–16, not FY2014), and **any period with a disclosed amendment is never attributed to a standard** — independent evidence of a real error wins. Akorn FY2014 now reads "unexplained (candidate revision)" across all three sections.
+
+**Result on the full population:** of 52,233 testable sections that moved, standards explain all of the movement in ~12% and part of it in ~8%; **42,160 sections remain unexplained candidate revisions.** Financing/investing are ~14.5% explained, operating ~10% — consistent with 606/842 being intra-section renames.
+
+**Known limits.** ASC 842's `"Lease"` pattern is the most over-inclusive entry (3,163 tags) and relies on its narrow window; tighten it first if a residual looks suspiciously small. More generally, tag × window attribution will always produce false positives — Akorn is the proof, and the amendment override only catches cases the filer disclosed. Report headline numbers **both with and without** the ASU exclusion rather than treating the adjusted figure as truth.
+
+**Outputs:** `scf_line_changes_flagged{suffix}.parquet` (line rows + `standard`, `source`, `impact`, `is_standard_driven`, `standard_overridden`, `era`), `scf_section_adjusted{suffix}.parquet` (+ `std_difference`, `std_applied`, `unexplained_difference`, `section_verdict`), `scf_period_adjusted{suffix}.parquet` (+ `cfo/cfi/cff_unexplained`, `period_type_adjusted`, `standards_involved`, `era`). `IN_SUFFIX` at the top selects which `001e` build to read (`"_full"` or `""`).
+
+**Era flags** (on the period output) mark periods that are not clean evidence: 17.6% are `early XBRL phase-in` (FY≤2012), 7.1% `censored right edge` (FY≥2022, where the panel simply lacks later filings to serve as comparatives), leaving 75.3% `clean`. Whether to exclude the early-XBRL era is still an open decision; it is flagged separately from FASB-driven changes on purpose.
 
 ### Running `001e` (config at the top of the script)
 
@@ -178,10 +203,13 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 - Analysis fits in memory at full scale (14.4 GB), so `ANALYSIS_CIKS` chunking is unnecessary.
 - The failure gradient is filer-quality, not a mechanism: pre-fix rates ran 0.46% (large accelerated) to 5.46% (smaller reporting), a 12× spread, with over-represented tags being related-party debt, warrants and derivative liabilities. Discontinued operations was tested and **ruled out** — sections containing any discontinued-ops tag failed at 1.77%, *below* baseline.
 
-**Next up:**
-1. Re-examine the residual 3,024 testable failures, prioritising large accelerated / accelerated filers — the only ones likely to survive sample screens.
-2. Decide how to treat `both_sides_foot == FALSE` (118,453 sections) and `section_ambiguous` (51,398): exclude, flag, or hand-review. Non-footing SCF tagging may itself be evidence for the thesis.
-3. Then Phase 2 (ASU exclusion list).
+**Phase 2 is built** (`002a`, run on the full population). After removing standard-driven amounts, 42,160 testable sections retain an unexplained movement — the candidate revisions.
+
+**Next up — the critical path to the headline claim.** The claim needs three pieces and two exist: (a) detect SCF revisions (`001e` ✓), (b) strip standard-driven ones (`002a` ✓), (c) show the survivors are **absent from Audit Analytics** (✗). Piece (c) is the gap and the only one that produces the actual number.
+
+1. **Repoint the Audit Analytics merge at `002a`'s output.** `002-build-quarterly-audit-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`; it needs to read `scf_period_adjusted_full.parquet` instead, and the join logic revisited since the grain and column names differ. The deliverable is the proportion of unexplained revisions that Audit Analytics never recorded.
+2. **Sample construction**, now decidable because the numbers exist: drop financials (SIC 6000-6999) and probably utilities; decide on the 20.8% non-testable and 6.6% ambiguous sections; truncate the panel to the clean era (roughly FY2013–2021, excluding early-XBRL and the censored right edge).
+3. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%), worth a footnote rather than more engineering.
 
 **Known stale items:** the header comment block at the top of `001e` still describes the earlier two-anchor design (two anchor filings, a single `negating` rule, a `scf_lines_raw.parquet` output) — the body is current. The 451 MB of parts still sit in Dropbox and will sync to coauthors despite being rebuildable in ~31 min.
 
@@ -196,7 +224,7 @@ Work here is sequenced in two dependent phases — do not skip ahead to phase 2 
 
    Why tag-level, not section-level: you cannot just take the change in a section's total (e.g. operating cash flow as originally filed vs. as later reported in a comparative-period filing) and call that a misstatement. That net delta conflates true misstatements with legitimate, standard-driven reclassifications — e.g. ASU 2016-09 moved excess tax benefits from share-based comp from financing to operating for essentially every filer in the same adoption window, which would look identical to a misstatement if you only looked at the CFO section total. Only by tracking which *individual tags* changed within a section can phase 2 later distinguish the two.
 
-2. **Phase 2 (started — exploratory findings below, nothing built yet): standard-driven reclassification exclusion list.** Build a reference list of tags/years driven by accounting standard updates and use it to exclude/flag those changes, isolating true misstatements from standard-driven reclassifications.
+2. **Phase 2 (BUILT in `002a`; exploratory findings retained below): standard-driven reclassification exclusion list.** Build a reference list of tags/years driven by accounting standard updates and use it to exclude/flag those changes, isolating true misstatements from standard-driven reclassifications.
 
    **Method that works: empirical wave detection.** A standard-driven reclassification hits many filers in the same window with the same tag, so it shows up as a year where a tag's change rate spikes far above its own baseline, usually paired with the tag being abruptly abandoned or born. Idiosyncratic misstatements are diffuse. This was validated against known answers and then found standards that were *not* on the original list — so it should stay in-code as a detector rather than being frozen into a hand-written list, which also matters for extending past 2023.
 
