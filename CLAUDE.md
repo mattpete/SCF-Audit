@@ -16,7 +16,7 @@ The tension motivating the project: classification errors are conventionally tre
 
 The hypothesis: there are many undisclosed SCF reclassifications, and where issues are disclosed, they're often characterized as immaterial even when they are numerically material by conventional thresholds.
 
-This is why `001e` tracks the **disclosed** channel (10-K/A, 10-Q/A amendments) separately from the **silent** channel (a figure quietly changing in a later filing's comparative column), and why it works at the individual line-item level: a reclassification recharacterizes *where* a cash flow appears without moving the reported total, so a standard "did net income change" restatement screen misses it entirely. Akorn's Q2/Q3 2014 10-Q/A is the pattern in miniature — a formally disclosed amendment that restated several operating line items while leaving CFO exactly unchanged.
+This is why `001a` tracks the **disclosed** channel (10-K/A, 10-Q/A amendments) separately from the **silent** channel (a figure quietly changing in a later filing's comparative column), and why it works at the individual line-item level: a reclassification recharacterizes *where* a cash flow appears without moving the reported total, so a standard "did net income change" restatement screen misses it entirely. Akorn's Q2/Q3 2014 10-Q/A is the pattern in miniature — a formally disclosed amendment that restated several operating line items while leaving CFO exactly unchanged.
 
 ### The headline descriptive claim
 
@@ -26,7 +26,7 @@ Note this claim is **robust to the tag-versus-line-item caveat below**, because 
 
 ### Measurement caveat: tags proxy for line items (OPEN — deliberately not settled)
 
-`001e` observes changes in XBRL **tags**, which only proxy for changes in **line items**. A filer can retag the same line with a different element and nothing economic changes — `IncreaseDecreaseInDeferredRevenue` → `IncreaseDecreaseInContractWithCustomerLiability` under ASC 606, or `RepaymentsOfLongTermCapitalLeaseObligations` → `FinanceLeasePrincipalPayments` under ASC 842. The slippage runs one way: **tag-level counts overstate line-item changes.**
+`001a` observes changes in XBRL **tags**, which only proxy for changes in **line items**. A filer can retag the same line with a different element and nothing economic changes — `IncreaseDecreaseInDeferredRevenue` → `IncreaseDecreaseInContractWithCustomerLiability` under ASC 606, or `RepaymentsOfLongTermCapitalLeaseObligations` → `FinanceLeasePrincipalPayments` under ASC 842. The slippage runs one way: **tag-level counts overstate line-item changes.**
 
 Scope it correctly rather than caveating everything. It affects descriptive *tag-level* counts ("N line items were revised"); it does **not** affect the section-level CFO/CFI/CFF measures that carry the actual tests, because a rename inside a section nets to zero and leaves the subtotal untouched — which the reconciliation check verifies directly. Section-level outcomes are therefore primary; tag-level detail is diagnostic (identifying *why* a section moved, so ASU-driven causes can be excluded).
 
@@ -49,20 +49,33 @@ Scope it correctly rather than caveating everything. It affects descriptive *tag
 
 ### Data pipeline lineage
 
-The `Code/` scripts are numbered by pipeline stage, but there are two parallel/superseded lineages for extracting XBRL tags — know which one is current before editing:
+Scripts are numbered by research goal: `001x` builds the SCF revision dataset from XBRL, `002x` links it to Audit Analytics. Letters run in execution order within a goal. `Code/legacy/` holds superseded approaches, kept for reference and not part of any run.
 
-- **JSON lineage (superseded):** `001-extract-CF-tags-from-XBRL-json.R` → `001b-extract-all-tags-from-XBRL-json.R`. Reads SEC's per-CIK `companyfacts.zip` (JSON), pulling a fixed, hardcoded list of `us-gaap` concept names (e.g. `NetCashProvidedByUsedInOperatingActivities`) directly by tag name, with simple fallback tags (e.g. `ProfitLoss` if `NetIncomeLoss` missing).
-- **TSV lineage (current):** `001c-extract-all-tags-from-XBRL-tsv.R` → `001d-process-GAAP-taxonomy.R`. Reads SEC's quarterly/monthly Financial Statement Data Sets (`_num.tsv` + `_sub.tsv`). `001c OLD.R` is a stale prior version kept for reference only.
-  - `001d` is the most refined script: instead of a hardcoded tag list, it derives the target SCF tags dynamically from `GAAP_Taxonomy.xlsx` (Presentation sheet), filtered to Statement-of-Cash-Flows-related `definition` values (covers standard, deposit-based, insurance-based, securities-based, REIT, and direct-method SCF variants). This makes tag coverage taxonomy-driven rather than a fixed list, and adds reclassification/disaggregation detection (see below) that the earlier scripts lack.
-  - `002 Create FS from XBRL data.R` is a separate, broader/earlier exploration that builds full financial statements (BS/IS/CF/EQ) from the raw `num`/`tag`/`pre`/`sub` files rather than isolating specific SCF tags — largely scratch/validation code exploring the raw file structure.
-- **Current script for Phase 1: `001e-identify-scf-line-changes.R`.** Supersedes `001d` for line-item change detection (`001d` is preserved as a fallback). See "Phase 1 detection design" below.
-- **Current script for Phase 2: `002a-flag-standard-driven-changes.R`.** Consumes `001e`'s output, attributes changes to the accounting standards that required them, and subtracts them to leave an unexplained residual per section. See "Phase 2 design" below.
+**Live chain — run in this order:**
 
-### Phase 1 detection design (`001e`)
+| script | does | runtime |
+|---|---|---|
+| `000-utilities-functions.R` | sourced by all; R options and helper functions | — |
+| `001a-extract-scf-lines-and-changes.R` | extracts every SCF line from the raw SEC datasets and detects what changed between as-filed and latest presentation | ~33 min (checkpointed, resumable) |
+| `001b-flag-standard-driven-changes.R` | attributes changes to the standards that required them and subtracts them, leaving an unexplained residual per section | ~2 min |
+| `001c-build-filing-audit-summary.R` | collapses to one row per filing-period and writes the hand-audit samples | ~1 min |
+| `002a-build-audit-analytics-sample.R` | merges Audit Analytics restatement/adjustment data | — |
+
+Only `001a` touches the raw 6.2 GB of SEC files; everything after it reads parquet, so `001b`/`001c` can be re-run freely after any logic change.
+
+**`002a` is not yet wired to this chain.** It still reads `xbrl_all_tsv.parquet` from the superseded `legacy/extract-all-tags-from-XBRL-tsv.R`, not `001b`'s output. Repointing it at `scf_period_adjusted_full.parquet` — and revisiting the join, since the grain and column names differ — is the next substantive task.
+
+**`Code/legacy/`** (not run; numeric prefixes dropped because the old numbering no longer applies):
+- `extract-all-tags-from-XBRL-tsv.R` (was `001c`) — the predecessor extractor; still generates the `xbrl_all_tsv.parquet` that `002a` currently consumes.
+- `process-GAAP-taxonomy.R` (was `001d`) — selected SCF tags by filtering `GAAP_Taxonomy.xlsx` presentation roles, covering the standard, deposit-based, insurance-based, securities-based, REIT and direct-method SCF variants. Superseded by `001a`, which reads the SEC `pre` file instead; kept as a fallback.
+
+Removed in the reorganisation and recoverable from git history: the JSON/`companyfacts.zip` lineage (`001-extract-CF-tags-from-XBRL-json.R`), a stale copy of the TSV extractor, and `002 Create FS from XBRL data.R` (early exploration of the raw file structure).
+
+### Phase 1 detection design (`001a`)
 
 Detects changes between the SCF **as originally filed** and the SCF **as later re-presented as a prior-period comparative**, at the individual line-item level. Key design decisions, each of which fixes a specific failure mode found while validating against Walmart:
 
-- **SCF membership comes from `pre` (`stmt == "CF"`), not the GAAP taxonomy.** Taxonomy-role filtering (what `001d` does) silently drops tags a filer borrowed from another statement's taxonomy section. This is the source of the `"missing?"` entries in `Examples.xlsx` — both resolve to standard `us-gaap` tags (`RepaymentsOfLongTermCapitalLeaseObligations`, `OtherNoncashIncomeExpense`) that `001d` misses.
+- **SCF membership comes from `pre` (`stmt == "CF"`), not the GAAP taxonomy.** Taxonomy-role filtering (what `legacy/process-GAAP-taxonomy.R` does) silently drops tags a filer borrowed from another statement's taxonomy section. This is the source of the `"missing?"` entries in `Examples.xlsx` — both resolve to standard `us-gaap` tags (`RepaymentsOfLongTermCapitalLeaseObligations`, `OtherNoncashIncomeExpense`) that `legacy/process-GAAP-taxonomy.R` misses.
 - **Section assignment** is derived per filing from presentation order: a subtotal closes its own section, so each line takes the first subtotal at or after it. **No canonical operating → investing → financing order is assumed**, and whatever anchors exist are used. An earlier version demanded all three subtotals in strict sequence and set `section = NA` for every line of any filing that failed — discarding 37,465 filings (11.05%) for three unrelated reasons: a subtotal merely absent (25,481 tag operating + financing but no investing), financing legitimately presented *before* investing (2,083), and 867 that satisfied the order yet were rejected because `max(line)` picked up a twice-presented subtotal. What a missing anchor really costs is certainty about the boundary it would have drawn, so those filings are now assigned **and** flagged `section_ambiguous` (34,277 filings, 10.1%) rather than silently dropped. `section = NA` no longer occurs.
 - **Anchored on three specific filings**, not aggregated across comparatives:
   - `orig_*` — earliest regular 10-K/10-Q presenting the period as its own current period ("as filed").
@@ -106,7 +119,7 @@ Detects changes between the SCF **as originally filed** and the SCF **as later r
 
 Practical path: filter `scf_period_summary` for interesting periods → drop to `scf_line_changes` to see which tags drove it (what Phase 2 needs) → `scf_lines_parts/` to inspect a filing as filed.
 
-### Phase 2 design (`002a-flag-standard-driven-changes.R`)
+### Phase 2 design (`001b-flag-standard-driven-changes.R`)
 
 Attributes changed SCF line items to the standards that required them, sums what each standard accounts for within a section, and subtracts it:
 
@@ -126,17 +139,17 @@ Three constraints the data forced, each after a failed attempt — do not undo t
 
 **Known limits.** ASC 842's `"Lease"` pattern is the most over-inclusive entry (3,163 tags) and relies on its narrow window; tighten it first if a residual looks suspiciously small. More generally, tag × window attribution will always produce false positives — Akorn is the proof, and the amendment override only catches cases the filer disclosed. Report headline numbers **both with and without** the ASU exclusion rather than treating the adjusted figure as truth.
 
-**Outputs:** `scf_line_changes_flagged{suffix}.parquet` (line rows + `standard`, `source`, `impact`, `is_standard_driven`, `standard_overridden`, `era`), `scf_section_adjusted{suffix}.parquet` (+ `std_difference`, `std_applied`, `unexplained_difference`, `section_verdict`), `scf_period_adjusted{suffix}.parquet` (+ `cfo/cfi/cff_unexplained`, `period_type_adjusted`, `standards_involved`, `era`). `IN_SUFFIX` at the top selects which `001e` build to read (`"_full"` or `""`).
+**Outputs:** `scf_line_changes_flagged{suffix}.parquet` (line rows + `standard`, `source`, `impact`, `is_standard_driven`, `standard_overridden`, `era`), `scf_section_adjusted{suffix}.parquet` (+ `std_difference`, `std_applied`, `unexplained_difference`, `section_verdict`), `scf_period_adjusted{suffix}.parquet` (+ `cfo/cfi/cff_unexplained`, `period_type_adjusted`, `standards_involved`, `era`). `IN_SUFFIX` at the top selects which `001a` build to read (`"_full"` or `""`).
 
 **Era flags** (on the period output) mark periods that are not clean evidence: 17.6% are `early XBRL phase-in` (FY≤2012), 7.1% `censored right edge` (FY≥2022, where the panel simply lacks later filings to serve as comparatives), leaving 75.3% `clean`. Whether to exclude the early-XBRL era is still an open decision; it is flagged separately from FASB-driven changes on purpose.
 
-### Hand-audit summary (`002b-build-filing-audit-summary.R`)
+### Hand-audit summary (`001c-build-filing-audit-summary.R`)
 
 Collapses the pipeline to **one row per filing-period** (267,282 rows × 61 cols) so a case can be checked against the actual SEC filing by hand. Carries company name, fiscal year/period, both anchor filing dates and accession numbers, **EDGAR index URLs** for the original/comparative/amendment filings, the three section totals as filed and as latest presented, the change, the standard-driven portion, the unexplained residual, per-section changed flags and tag counts, and a readable string of every changed tag with its before/after amounts and standard attribution.
 
 Grain note: one row per filing 99% of the time — 264,477 distinct filings produce 267,282 periods, because 2,769 filings anchor 2–3 periods (typically a 10-K covering both its annual period and a Q4). `n_periods_this_filing` flags those so they are not mistaken for duplicates.
 
-Company name and `fp` do **not** survive `001e` (which carries only `cik`/`sic`/`afs`), so `002b` rebuilds them from the raw `sub` files.
+Company name and `fp` do **not** survive `001a` (which carries only `cik`/`sic`/`afs`), so `001c` rebuilds them from the raw `sub` files.
 
 All amounts are RAW DOLLARS as tagged, so they tie to a filing without rescaling; only the `*_changed_tags` strings use $ thousands for readability.
 
@@ -146,7 +159,7 @@ Worked examples from the sample, showing the kind of thing an audit should confi
 - *Weis Markets FY2016* — `Depreciation` (66,496) and `AmortizationOfIntangibleAssets` (10,366) both go to zero while `DepreciationDepletionAndAmortization` appears at 76,862, i.e. exactly their sum: a 2-into-1 tag consolidation netting to zero. CFO still moves 2,517, correctly traced to a different line (receivables/prepaid).
 - *SunCoke Energy Partners Q1 2017* — CFI moves 100, sole changed tag `IncreaseDecreaseInRestrictedCash`, correctly attributed to ASU 2016-18 and leaving no residual.
 
-### Running `001e` (config at the top of the script)
+### Running `001a` (config at the top of the script)
 
 The script has two phases with **separate scopes**, which is the single most important thing to understand before running it:
 
@@ -174,14 +187,14 @@ Three things make resume safe:
 
 ### Core pattern: original vs. best value
 
-Every pipeline script (`001`, `001b`, `001c`, `001d`) repeats the same restatement-tracking pattern per tag/account:
+Every pipeline script (`001`, `001b`, `001c`, `legacy/process-GAAP-taxonomy.R`) repeats the same restatement-tracking pattern per tag/account:
 
 1. **Original**: earliest regular (10-K/10-Q) filing where a given (cik, tag, period) was the *current* reporting period (`is_current_period`, computed as `ddate == period` in the TSV lineage or `end == max(end)` per filing in the JSON lineage).
 2. **Comparatives**: later regular filings that report the same period as a *prior-year/quarter comparative* — these can silently restate the original number without a formal amendment.
 3. **Amendments**: 10-K/A or 10-Q/A filings covering the same period, filed after the original.
 4. **`best_val`**: amendment > comparative revision > original, in that priority order. `correction`/`correction_channel`/`correction_route` categorizes which of these happened (naming varies slightly by script vintage).
 
-`001d` extends this with two extra states other scripts don't have:
+`legacy/process-GAAP-taxonomy.R` extends this with two extra states other scripts don't have:
 - **Sign flip** detection — a same-magnitude, opposite-sign restatement, treated as a reclassification rather than a real correction.
 - **Disaggregation** — a tag that appears only in later comparative filings (never in the original filing for that period) is treated as evidence the original line item was later split apart; these get synthetic rows with `correction = "Disaggregated"` and `original_val = 0`.
 
@@ -194,7 +207,7 @@ Every pipeline script (`001`, `001b`, `001c`, `001d`) repeats the same restateme
 
 ### Downstream: audit sample construction
 
-`002-build-quarterly-audit-sample.R` is the consumer of the XBRL panel output (`xbrl_all_tsv.parquet` from `001c`). It loads Audit Analytics restatement (`restatement-data-*.xlsx`) and adjustment (`adjustment-data-*.xlsx`) exports, dedupes/combines them (restatements take priority over adjustments on cik/file_date conflicts), then left-joins XBRL periods whose `end` date falls within each restatement's `[misstate_begin, misstate_end]` window (`join_by(cik, between(...))`). YTD figures (CFO/CFI/CFF/NI) are deduplicated to one row per fiscal year before summing across a restatement's window, since summing raw YTD quarters would double-count.
+`002a-build-audit-analytics-sample.R` is the consumer of the XBRL panel output (`xbrl_all_tsv.parquet` from `001c`). It loads Audit Analytics restatement (`restatement-data-*.xlsx`) and adjustment (`adjustment-data-*.xlsx`) exports, dedupes/combines them (restatements take priority over adjustments on cik/file_date conflicts), then left-joins XBRL periods whose `end` date falls within each restatement's `[misstate_begin, misstate_end]` window (`join_by(cik, between(...))`). YTD figures (CFO/CFI/CFF/NI) are deduplicated to one row per fiscal year before summing across a restatement's window, since summing raw YTD quarters would double-count.
 
 ### `Code/000-utilities-functions.R`
 
@@ -219,28 +232,28 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 - Analysis fits in memory at full scale (14.4 GB), so `ANALYSIS_CIKS` chunking is unnecessary.
 - The failure gradient is filer-quality, not a mechanism: pre-fix rates ran 0.46% (large accelerated) to 5.46% (smaller reporting), a 12× spread, with over-represented tags being related-party debt, warrants and derivative liabilities. Discontinued operations was tested and **ruled out** — sections containing any discontinued-ops tag failed at 1.77%, *below* baseline.
 
-**Phase 2 is built** (`002a`, run on the full population). After removing standard-driven amounts, 42,160 testable sections retain an unexplained movement — the candidate revisions.
+**Phase 2 is built** (`001b`, run on the full population). After removing standard-driven amounts, 42,160 testable sections retain an unexplained movement — the candidate revisions.
 
-**Next up — the critical path to the headline claim.** The claim needs three pieces and two exist: (a) detect SCF revisions (`001e` ✓), (b) strip standard-driven ones (`002a` ✓), (c) show the survivors are **absent from Audit Analytics** (✗). Piece (c) is the gap and the only one that produces the actual number.
+**Next up — the critical path to the headline claim.** The claim needs three pieces and two exist: (a) detect SCF revisions (`001a` ✓), (b) strip standard-driven ones (`001b` ✓), (c) show the survivors are **absent from Audit Analytics** (✗). Piece (c) is the gap and the only one that produces the actual number.
 
-1. **Repoint the Audit Analytics merge at `002a`'s output.** `002-build-quarterly-audit-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`; it needs to read `scf_period_adjusted_full.parquet` instead, and the join logic revisited since the grain and column names differ. The deliverable is the proportion of unexplained revisions that Audit Analytics never recorded.
+1. **Repoint the Audit Analytics merge at `001b`'s output.** `002a-build-audit-analytics-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`; it needs to read `scf_period_adjusted_full.parquet` instead, and the join logic revisited since the grain and column names differ. The deliverable is the proportion of unexplained revisions that Audit Analytics never recorded.
 2. **Sample construction**, now decidable because the numbers exist: drop financials (SIC 6000-6999) and probably utilities; decide on the 20.8% non-testable and 6.6% ambiguous sections; truncate the panel to the clean era (roughly FY2013–2021, excluding early-XBRL and the censored right edge).
 3. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%), worth a footnote rather than more engineering.
 
-**Known stale items:** the header comment block at the top of `001e` still describes the earlier two-anchor design (two anchor filings, a single `negating` rule, a `scf_lines_raw.parquet` output) — the body is current. The 451 MB of parts still sit in Dropbox and will sync to coauthors despite being rebuildable in ~31 min.
+**Known stale items:** the header comment block at the top of `001a` still describes the earlier two-anchor design (two anchor filings, a single `negating` rule, a `scf_lines_raw.parquet` output) — the body is current. The 451 MB of parts still sit in Dropbox and will sync to coauthors despite being rebuildable in ~31 min.
 
 ## Roadmap / open tasks
 
 Work here is sequenced in two dependent phases — do not skip ahead to phase 2 without the user's go-ahead:
 
-1. **Phase 1 (built, validated on two companies): accurate SCF change detection.** Implemented in `001e-identify-scf-line-changes.R` (see "Phase 1 detection design" above). Validated against the Walmart hand-built ground truth and against Akorn, a known restatement case. Open items before declaring Phase 1 done:
+1. **Phase 1 (built, validated on two companies): accurate SCF change detection.** Implemented in `001a-identify-scf-line-changes.R` (see "Phase 1 detection design" above). Validated against the Walmart hand-built ground truth and against Akorn, a known restatement case. Open items before declaring Phase 1 done:
    - Validate on more filers. Banks/insurers/REITs are *not* worth hardening against — accounting papers conventionally drop financials (SIC 6000-6999), so those observations get dropped anyway. `sic`/`afs` are carried in the output for that screening.
    - Decide how to treat filings whose own SCF does not foot (`both_sides_foot == FALSE`): exclude, flag, or hand-review. These are a small minority but they are the only place reconciliation fails, and non-footing SCF tagging may itself be evidence for the paper's thesis.
-   - Amendments are now a full third anchor (see design above). Two open questions: whether to use the *first* or *last* amendment as the anchor when there are several (currently last, consistent with the latest-attestation convention; `001d` used first, and `n_amendments` is carried so this can be revisited), and whether comparative columns *inside* an /A filing should also count toward the silent channel (currently they do not — comparatives come only from regular 10-K/10-Q).
+   - Amendments are now a full third anchor (see design above). Two open questions: whether to use the *first* or *last* amendment as the anchor when there are several (currently last, consistent with the latest-attestation convention; `legacy/process-GAAP-taxonomy.R` used first, and `n_amendments` is carried so this can be revisited), and whether comparative columns *inside* an /A filing should also count toward the silent channel (currently they do not — comparatives come only from regular 10-K/10-Q).
 
    Why tag-level, not section-level: you cannot just take the change in a section's total (e.g. operating cash flow as originally filed vs. as later reported in a comparative-period filing) and call that a misstatement. That net delta conflates true misstatements with legitimate, standard-driven reclassifications — e.g. ASU 2016-09 moved excess tax benefits from share-based comp from financing to operating for essentially every filer in the same adoption window, which would look identical to a misstatement if you only looked at the CFO section total. Only by tracking which *individual tags* changed within a section can phase 2 later distinguish the two.
 
-2. **Phase 2 (BUILT in `002a`; exploratory findings retained below): standard-driven reclassification exclusion list.** Build a reference list of tags/years driven by accounting standard updates and use it to exclude/flag those changes, isolating true misstatements from standard-driven reclassifications.
+2. **Phase 2 (BUILT in `001b`; exploratory findings retained below): standard-driven reclassification exclusion list.** Build a reference list of tags/years driven by accounting standard updates and use it to exclude/flag those changes, isolating true misstatements from standard-driven reclassifications.
 
    **Method that works: empirical wave detection.** A standard-driven reclassification hits many filers in the same window with the same tag, so it shows up as a year where a tag's change rate spikes far above its own baseline, usually paired with the tag being abruptly abandoned or born. Idiosyncratic misstatements are diffuse. This was validated against known answers and then found standards that were *not* on the original list — so it should stay in-code as a detector rather than being frozen into a hand-written list, which also matters for extending past 2023.
 
@@ -262,7 +275,7 @@ Work here is sequenced in two dependent phases — do not skip ahead to phase 2 
 
    **Concept clustering works as a discovery method.** Splitting tag names on CamelCase into unigrams and adjacent bigrams, then looking for term-years where the change rate spikes above that term's own baseline, recovers every standard above and dates it — with no reference list as input. The year-by-year narrative it produces: FY2011 taxes/impairment (early-XBRL phase-in), FY2012 stock options/business combinations (taxonomy churn), **FY2015 excess benefit** (2016-09), **FY2017 securities/restricted/deferred revenue** (2016-01, 2016-18, 606), **FY2018 customer/contract** (606), **FY2020–21 lease/right-of-use** (842). Keep this in-code; it is how the list stays current past 2023.
 
-   **Timing: the ASU signal lands on the periods whose comparatives were restated, NOT the adoption year.** Excess tax benefits spike in FY2015 — a year before ASU 2016-09 was even issued — because a firm adopting in FY2017 retrospectively restates its FY2015–16 comparatives, and `001e` compares "FY2015 as originally filed" against "FY2015 as shown in the latest filing". Exclusion windows must therefore span roughly *adoption year − 2 through adoption year*, keyed off where the rate actually spikes rather than the effective date.
+   **Timing: the ASU signal lands on the periods whose comparatives were restated, NOT the adoption year.** Excess tax benefits spike in FY2015 — a year before ASU 2016-09 was even issued — because a firm adopting in FY2017 retrospectively restates its FY2015–16 comparatives, and `001a` compares "FY2015 as originally filed" against "FY2015 as shown in the latest filing". Exclusion windows must therefore span roughly *adoption year − 2 through adoption year*, keyed off where the rate actually spikes rather than the effective date.
 
    **Section-level impact, measured (this is what should drive the design):**
 
@@ -284,12 +297,12 @@ Work here is sequenced in two dependent phases — do not skip ahead to phase 2 
 
    Across all four, ~25,700 threatening periods before overlap, against 267,282 total — order of 10% potentially ASU-contaminated.
 
-   **Revised deliverable:** `002a-flag-standard-driven-changes.R` should record **which standard** and **what kind of impact** per affected row, not one `standard_driven` boolean, so exclusions can be applied per outcome variable instead of discarding periods that are harmless to the test at hand. Two layers as before: a curated reference table (tag × year-window, windows set from observed spikes) plus the concept detector retained in-code. Still open: whether early-XBRL taxonomy churn (FY2011–12) gets the same reason code as FASB-driven changes, or a separate, weaker one.
+   **Revised deliverable:** `001b-flag-standard-driven-changes.R` should record **which standard** and **what kind of impact** per affected row, not one `standard_driven` boolean, so exclusions can be applied per outcome variable instead of discarding periods that are harmless to the test at hand. Two layers as before: a curated reference table (tag × year-window, windows set from observed spikes) plus the concept detector retained in-code. Still open: whether early-XBRL taxonomy churn (FY2011–12) gets the same reason code as FASB-driven changes, or a separate, weaker one.
 
 ## Working with this repo
 
 - Data files (parquet, `.tsv`, `.xlsx` inputs) are never committed — they live under the paths in `.Renviron`, outside the repo. Don't assume they're readable from a fresh checkout without that env file.
-- **`001e-identify-scf-line-changes.R` is the actively maintained script.** Make changes to the original/comparative/amendment detection there. `001d` is preserved as a fallback and should not be edited without the user's say-so; the JSON lineage (`001`, `001b`) and `002 Create FS from XBRL data.R` are earlier iterations kept for reference.
-- `002-build-quarterly-audit-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`, **not** `001e`'s output. Repointing it at `scf_period_summary.parquet` is future work and will need the join logic revisited, since the grain and column names differ.
-- Every non-obvious rule in `001e` was derived from a specific filing that broke a simpler rule, and the counter-example is cited in the comment beside it. Before "simplifying" any of them — the conditional income-block collapse, the per-line sign resolution, the `cf_periods` restriction — check the cited case, because the obvious simplification is usually what was tried first and found wrong.
+- **`001a-identify-scf-line-changes.R` is the actively maintained script.** Make changes to the original/comparative/amendment detection there. `legacy/process-GAAP-taxonomy.R` is preserved as a fallback and should not be edited without the user's say-so; the JSON lineage (`001`, `001b`) and `002 Create FS from XBRL data.R` are earlier iterations kept for reference.
+- `002a-build-audit-analytics-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`, **not** `001a`'s output. Repointing it at `scf_period_summary.parquet` is future work and will need the join logic revisited, since the grain and column names differ.
+- Every non-obvious rule in `001a` was derived from a specific filing that broke a simpler rule, and the counter-example is cited in the comment beside it. Before "simplifying" any of them — the conditional income-block collapse, the per-line sign resolution, the `cf_periods` restriction — check the cited case, because the obvious simplification is usually what was tried first and found wrong.
 - **Tooling gotcha:** writing an R script via a Bash heredoc in this environment collapses `\\1` to `\1`, so regex backreferences in a replacement string silently become control characters `\x01`/`\x02` — which corrupts output in ways that look like data problems (words losing their first and last letters) rather than a quoting bug. Either use the Write tool for scripts containing backreferences, or avoid them: zero-width lookarounds with a plain replacement work, e.g. `gsub("(?<=[a-z0-9])(?=[A-Z])", " ", x, perl = TRUE)` to split CamelCase.

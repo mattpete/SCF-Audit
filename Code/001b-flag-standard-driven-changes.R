@@ -1,8 +1,8 @@
 # =============================================================================
-# 002a - Separate standard-driven SCF changes from genuine revisions
+# 001b - Separate standard-driven SCF changes from genuine revisions
 # =============================================================================
 # PURPOSE (Phase 2 of project roadmap -- see CLAUDE.md)
-#   001e detects every change between the SCF as originally filed and as later
+#   001a detects every change between the SCF as originally filed and as later
 #   re-presented. Some of those changes are not errors at all: the FASB required
 #   them. This script attributes the attributable ones to specific accounting
 #   standards, sums the amount each standard accounts for within a section, and
@@ -29,7 +29,7 @@
 #   that are harmless to the test at hand.
 #
 # WHY THE WINDOWS ARE NOT THE EFFECTIVE DATES
-#   Adoption generally restates the COMPARATIVES, and 001e compares a period as
+#   Adoption generally restates the COMPARATIVES, and 001a compares a period as
 #   originally filed against that same period as shown in the latest filing. So
 #   the signal lands on the periods whose comparatives were restated -- typically
 #   the years BEFORE adoption, not the adoption year. Excess tax benefits spike
@@ -61,7 +61,7 @@ source("code/000-utilities-functions.R")
 
 # 2. Configuration -------------------------------------------------------------
 
-# Which 001e outputs to read. "_full" is the full-population build; "" is a
+# Which 001a outputs to read. "_full" is the full-population build; "" is a
 # targeted build (e.g. the Walmart/Akorn validation pair).
 IN_SUFFIX <- "_full"
 
@@ -238,7 +238,7 @@ cat("Standards in reference table:", nrow(STANDARDS), "\n")
 print(STANDARDS |> select(standard, impact, fy_from, fy_to, effective_fy))
 
 
-# 4. Load 001e output ----------------------------------------------------------
+# 4. Load 001a output ----------------------------------------------------------
 lc <- read_parquet(glue("{data_path}scf_line_changes{IN_SUFFIX}.parquet"))
 sc <- read_parquet(glue("{data_path}scf_section_changes{IN_SUFFIX}.parquet"))
 
@@ -396,9 +396,9 @@ scf_period_adjusted <- scf_period_adjusted |>
       (abs(cff_unexplained) >= MATERIALITY_FLOOR),
     any_standard = standards_involved != "",
     standards_involved = if_else(standards_involved == "", NA_character_, standards_involved),
-    # Same four-way taxonomy as 001e's period_type, recomputed on the amounts
+    # Same four-way taxonomy as 001a's period_type, recomputed on the amounts
     # left after standards are removed. The intra-section category is preserved
-    # (lines moved but no subtotal did) so this stays comparable to 001e; it is
+    # (lines moved but no subtotal did) so this stays comparable to 001a; it is
     # keyed on UNATTRIBUTED line changes, so a period whose only line movement
     # was a standard-driven rename correctly lands in "No change".
     period_type_adjusted = case_when(
@@ -498,7 +498,7 @@ print(scf_section_adjusted |> summarise(
                      abs((std_difference + other_difference) -
                          subtotal_difference) < 1)))
 
-cat("\n=== period classification: before (001e) vs after removing standards ===\n")
+cat("\n=== period classification: before (001a) vs after removing standards ===\n")
 ps_orig <- read_parquet(glue("{data_path}scf_period_summary{IN_SUFFIX}.parquet")) |>
   select(cik, start, end, period_type)
 print(scf_period_adjusted |> left_join(ps_orig, by = c("cik","start","end")) |>

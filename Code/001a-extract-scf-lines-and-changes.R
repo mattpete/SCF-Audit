@@ -1,5 +1,5 @@
 # =============================================================================
-# 001e - Identify line-item level changes in the Statement of Cash Flows
+# 001a - Extract SCF lines and identify line-item level changes
 # =============================================================================
 # PURPOSE (Phase 1 of project roadmap -- see CLAUDE.md)
 #   Detect every change between the SCF as originally filed and the SCF as it is
@@ -11,18 +11,18 @@
 #   reclassification (e.g. ASU 2016-09 moving excess tax benefits from financing
 #   to operating). Phase 2 will use the tag identity to filter those out.
 #
-# HOW THIS DIFFERS FROM 001d (which is preserved as a fallback)
+# HOW THIS DIFFERS FROM legacy/process-GAAP-taxonomy.R (the superseded approach)
 #   1. SCF membership comes from the SEC `pre` file (stmt == "CF") -- i.e. what
 #      the filer ACTUALLY presented on the cash flow statement -- rather than
 #      from filtering the GAAP taxonomy to SCF `definition` roles. Taxonomy-role
 #      filtering silently drops tags a filer borrowed from another statement's
 #      taxonomy section. (Confirmed on Walmart: RepaymentsOfLongTermCapitalLease-
-#      Obligations and OtherNoncashIncomeExpense are both missed by 001d.)
+#      Obligations and OtherNoncashIncomeExpense are both missed by it.)
 #   2. Section (operating/investing/financing) is assigned per filing from the
 #      presentation ordering relative to the section subtotal tags, so every line
 #      is attributed to a section.
 #   3. The `negating` presentation flag is applied so values match what a reader
-#      sees on the face of the filing (001d uses raw signs).
+#      sees on the face of the filing (the legacy script used raw signs).
 #   4. The comparison is anchored on two SPECIFIC FILINGS -- the original filing
 #      and the LAST filing to re-present the period -- rather than capping
 #      comparatives at 2 and coalescing. Per project convention, the most recent
@@ -36,7 +36,8 @@
 #   `difference` = as-filed value - subsequent value, matching Examples.xlsx.
 #
 # OUTPUT
-#   {data_path}scf_lines_raw.parquet    one row per filing x SCF line x period
+#   {data_path}scf_lines_parts/         DIRECTORY, one parquet per period
+#                                       (read with arrow::open_dataset)
 #   {data_path}scf_line_changes.parquet one row per company-period x tag
 #   {data_path}scf_section_changes.parquet one row per company-period x section
 # =============================================================================
@@ -101,7 +102,7 @@ scope_file    <- glue("{data_path}scf_lines_parts_scope.rds")
 # Checkpointing is per PERIOD, not per CIK, because the SEC Financial Statement
 # Data Sets are organised by period: one num/pre/sub file holds every filer for a
 # quarter. Resuming per CIK would mean rescanning all 86 period files (6.2 GB) for
-# each company. (The JSON lineage in 001/001b can checkpoint per CIK because
+# each company. (The JSON lineage (removed; see git history) could checkpoint per CIK because
 # companyfacts.zip stores one file per company -- this lineage cannot.)
 RESUME <- FALSE
 

@@ -1,5 +1,5 @@
 # =============================================================================
-# 002b - One-row-per-filing summary, built for HUMAN AUDIT
+# 001c - One-row-per-filing summary, built for HUMAN AUDIT
 # =============================================================================
 # PURPOSE
 #   Collapse the pipeline down to one row per filing-period, carrying everything
@@ -26,9 +26,9 @@
 #   thousands or millions, so divide accordingly. The one exception is the
 #   `*_changed_tags` strings, which use $ thousands to stay readable.
 #
-# INPUT   {data_path}scf_section_adjusted{IN_SUFFIX}.parquet   (002a)
-#         {data_path}scf_line_changes_flagged{IN_SUFFIX}.parquet (002a)
-#         {data_path}scf_period_summary{IN_SUFFIX}.parquet      (001e)
+# INPUT   {data_path}scf_section_adjusted{IN_SUFFIX}.parquet   (001b)
+#         {data_path}scf_line_changes_flagged{IN_SUFFIX}.parquet (001b)
+#         {data_path}scf_period_summary{IN_SUFFIX}.parquet      (001a)
 #         {raw_data_path}*_sub.parquet   (company name and fiscal period label)
 # OUTPUT  {data_path}scf_filing_summary{IN_SUFFIX}.parquet
 #         {data_path}audit_sample_changed.csv
@@ -58,12 +58,12 @@ AUDIT_N    <- 120
 AUDIT_SEED <- 20260922
 
 # A section counts as changed when the movement clears this, in dollars.
-# Matches 002a's floor: filings round to thousands, so less is noise.
+# Matches 001b's floor: filings round to thousands, so less is noise.
 MATERIALITY_FLOOR <- 1000
 
 
 # 3. Company name and fiscal period label --------------------------------------
-# Neither survives 001e (which carries only cik/sic/afs), so both are rebuilt
+# Neither survives 001a (which carries only cik/sic/afs), so both are rebuilt
 # from the raw sub files. `name` is per filing rather than per company, because
 # companies rename themselves and the filing's own label is what an auditor will
 # see on EDGAR.
