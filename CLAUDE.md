@@ -159,6 +159,35 @@ Worked examples from the sample, showing the kind of thing an audit should confi
 - *Weis Markets FY2016* — `Depreciation` (66,496) and `AmortizationOfIntangibleAssets` (10,366) both go to zero while `DepreciationDepletionAndAmortization` appears at 76,862, i.e. exactly their sum: a 2-into-1 tag consolidation netting to zero. CFO still moves 2,517, correctly traced to a different line (receivables/prepaid).
 - *SunCoke Energy Partners Q1 2017* — CFI moves 100, sole changed tag `IncreaseDecreaseInRestrictedCash`, correctly attributed to ASU 2016-18 and leaving no residual.
 
+### Audit Analytics link (`002a-link-audit-analytics.R`)
+
+The XBRL filing panel is the **main table**; Audit Analytics is **left-joined** onto it. That orientation is the point: AA only records a restatement once a filer *discloses* it, so a period where the pipeline finds an unexplained SCF revision and AA has nothing is a **silent revision** — invisible to any study that samples from AA. An earlier AA-anchored version of this script (see git history) could only measure how much of AA we match, and by construction could not see the silent population at all. The AA-anchored view survives as a coverage diagnostic only.
+
+**Join key:** `cik` (10-digit padded) plus the filing's `period_end` falling inside AA's restated/adjustment window. AA windows are firm-level date ranges spanning several reporting periods, so one AA event legitimately matches several filing-periods and a period can match several events; matches are aggregated to one row per filing-period.
+
+**Two independent disclosure channels**, kept separate because a filer can use one without the other: an **amendment** (10-K/A, 10-Q/A) that actually changed the SCF, detected by `001a` from the filings themselves; and an **AA record** covering the period. AA records are further split by `aa_flagged_cash_flow` — AA can log a restatement for, say, revenue recognition that happens to move the SCF too, so the event is disclosed but its cash-flow nature was never identified.
+
+**No right-censoring on the AA side:** AA disclosure dates run to 2025-03 (restatements) and 2026-02 (adjustments) while the panel stops at 2023, so even a 2023 revision had time to be disclosed. The panel's own right edge is a separate problem — see the `era` flag.
+
+**Headline result** (clean sample: testable sections, clean era, n = 120,985 filing-periods; 13,409 carry an unexplained revision):
+
+| | n | share of revisions |
+|---|---|---|
+| **SILENT — no AA record, no amendment** | **10,727** | **80.0%** |
+| In AA at all | 2,569 | 19.2% |
+| AA flagged it as a cash-flow failure | 842 | 6.3% |
+| Amendment but no AA record | 113 | 0.8% |
+
+So four in five unexplained SCF revisions never surface in either disclosure channel, and only about one in sixteen is characterised by AA as a cash flow problem.
+
+**It is not a small-filer artifact.** The silent rate is essentially flat across filer status — 82.1% for large accelerated filers, 78.2% accelerated, 74.0% non-accelerated, 83.4% smaller reporting. Large accelerated filers are, if anything, *slightly more* likely to have a silent revision, which rules out the obvious objection that this is micro-cap tagging sloppiness.
+
+AA catches cross-section reclassifications marginally more often than net-cash-flow changes (21.0% vs 17.6% in AA), and characterises them as cash-flow issues more often (531 of 6,210 vs 311 of 7,199) — but both rates are low.
+
+**Reverse coverage diagnostic:** of 14,029 AA events whose window overlaps the panel, 9,136 (65.1%) match at least one filing-period. The 35% gap is expected — AA covers filers and periods the XBRL panel does not.
+
+**Outputs:** `scf_filing_with_aa{suffix}.parquet` (the filing panel plus `aa_match`, `aa_flagged_cash_flow`, `aa_n_events`, `aa_first_disclosed`, `aa_days_after_filing`, `aa_keys`, `disclosure_status`, `silent_revision`, `aa_missed_cash_flow_nature`, `in_clean_sample`) and `aa_cleaned.parquet` (17,703 deduplicated AA events: 14,037 restatements, 3,666 adjustments, 1,772 cash-flow flagged, 5,062 formal 8-K Item 4.02).
+
 ### Running `001a` (config at the top of the script)
 
 The script has two phases with **separate scopes**, which is the single most important thing to understand before running it:
@@ -234,7 +263,7 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 
 **Phase 2 is built** (`001b`, run on the full population). After removing standard-driven amounts, 42,160 testable sections retain an unexplained movement — the candidate revisions.
 
-**Next up — the critical path to the headline claim.** The claim needs three pieces and two exist: (a) detect SCF revisions (`001a` ✓), (b) strip standard-driven ones (`001b` ✓), (c) show the survivors are **absent from Audit Analytics** (✗). Piece (c) is the gap and the only one that produces the actual number.
+**All three pieces of the headline claim now exist:** (a) detect SCF revisions (`001a`), (b) strip standard-driven ones (`001b`), (c) show the survivors are absent from Audit Analytics (`002a`). **Result: 80.0% of unexplained SCF revisions in the clean sample are silent** — no AA record and no amendment — and only 6.3% are characterised by AA as a cash-flow failure. The rate is flat across filer size, so it is not a micro-cap artifact.
 
 1. **Repoint the Audit Analytics merge at `001b`'s output.** `002a-build-audit-analytics-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`; it needs to read `scf_period_adjusted_full.parquet` instead, and the join logic revisited since the grain and column names differ. The deliverable is the proportion of unexplained revisions that Audit Analytics never recorded.
 2. **Sample construction**, now decidable because the numbers exist: drop financials (SIC 6000-6999) and probably utilities; decide on the 20.8% non-testable and 6.6% ambiguous sections; truncate the panel to the clean era (roughly FY2013–2021, excluding early-XBRL and the censored right edge).
