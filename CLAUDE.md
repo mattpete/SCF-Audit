@@ -412,7 +412,9 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 4. **Feed AA matches into `001b`'s disclosed-correction override.** `001b` already refuses to attribute a period to a standard when an *amendment* disclosed a correction (the guard that rescued Akorn FY2014), but it runs before the AA link exists, so a period disclosed only through Audit Analytics gets no such protection. `002b` measures the exposure: the standards layer fully claimed **139 of 4,473 changed AA-matched fiscal years (3.1%)**. Small, but it is the Akorn failure mode arriving by a second route, and a real defect rather than a judgement call. The fix needs a dependency inversion, since `001b` would have to read `aa_cleaned.parquet` which `002a` currently writes: either move the AA cleaning into its own earlier script, or let `001b` take the AA event table as an optional input.
 5. **Read the 47 AA-flagged-but-undetected events** (`aa_validate_cf_flagged_no_change.csv`) — the candidate false-negative pool for the whole detection design, now small enough to read exhaustively rather than sample.
 6. **Decompose the 3,178 unmatched AA events whose CIK and era are both present** — 36% of all unmatched events, and the only part of the coverage gap that could be a join defect rather than genuine non-coverage.
-7. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%) — a footnote rather than more engineering.
+7. **Measure the income-statement change from XBRL** rather than taking AA's `chg_ni`, making the two magnitudes symmetric in the disclosure-decision test. Needs no re-extraction (net income is already present for 98.2% of periods) and routes around validation item 12. See the dNI test section.
+8. **The consequence tests, which are what lift this from a minimum paper to a top-tier one.** The disclosure-decision result establishes that firms treat SCF errors as immaterial; it does not establish that anyone is harmed. Candidates, in rough order of tractability: future cash flow prediction (does an unrevised CFO forecast future CFO worse?), return prediction around the revealing filing, analyst cash flow forecast errors (I/B/E/S), and covenant or credit-model settings where CFO is a direct input. Compustat/CRSP are already staged in `DATA_PATH`; I/B/E/S is not and would need acquiring.
+9. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%) — a footnote rather than more engineering.
 
 ### Hand-audit in progress
 
@@ -474,7 +476,76 @@ The gradient by relative size is itself a sanity check, since larger revisions a
 
 **Even revisions exceeding 10% of the section subtotal are silent three times in four**, at a median of $6.1M. That version of the claim is immune to the rounding objection entirely and should be reported alongside the pooled figure.
 
-**Recommended change, not yet made:** add a relative screen beside `MATERIALITY_FLOOR` (either `|difference| / |section as filed|` or a rounding-equivalence test) and report headline figures both ways. Not done because it would move already-reported numbers in `001b`/`001c`/`002a`.
+**Now implemented, additively.** `001b` gained `REL_FLOOR` (0.1% of a section's own as-filed subtotal) and `ROUNDING_UNITS`, plus a line-level `is_rounding_change` flag that tests whether the comparative value IS the original rounded to a coarser unit. Every pre-existing column keeps its exact meaning and value, and the new screen appears as parallel `*_rel` columns, so previously reported figures stay reproducible and both can be shown side by side:
+
+| grain | new columns |
+|---|---|
+| line (`scf_line_changes_flagged`) | `is_rounding_change` |
+| section (`scf_section_adjusted`) | `subtotal_rel`, `unexplained_rel`, `subtotal_material_rel`, `unexplained_material_rel`, `all_movement_is_rounding`, `section_verdict_rel`, `n_rounding_changed`, `n_other_changed_nonround`, `rounding_difference` |
+| period (`scf_period_adjusted`) | `period_type_adjusted_rel`, `n_rounding_lines`, `n_sections_moved_rel`, `n_sections_rounding_only`, `n_other_changed_lines_nonround` |
+| filing (`scf_filing_summary`) | `any_unexplained_rel`, `rounding_only`, `n_rounding_lines`, `period_type_adjusted_rel` |
+| filing + AA (`scf_filing_with_aa`) | `revision_rel`, `silent_revision_rel` |
+
+**Measured effect.** Unexplained candidate sections fall 42,160 to 36,279 (-14%): 4,666 become "no movement" and 1,215 become a new `"rounding only"` verdict. At filing-period grain 2,491 periods lose unexplained status and 219 are rounding-only. **The headline barely moves: 80.0% silent to 79.1%**, on 13,409 revisions versus 12,117. Critically, the AA cash-flow-flagged count falls only 842 to 840, so the screen removes rounding without discarding revisions AA independently identified.
+
+**One bug worth recording**, because it is the kind that looks like a finding. The first implementation left the three new rounding columns out of the post-join `coalesce(.x, 0)` at `001b` line 382. Sections present in `sc` with no component rows in `lc_flagged` therefore carried `NA`, which poisoned the period-level sums and made 2,689 periods read as "Intra-section reclass" under the relative screen where the absolute screen said "No change" -- the screen appeared to ADD movement, which it can never do. Any future column added to `section_std` must go in that `across()` too.
+
+`001b`'s four arithmetic sanity checks still pass unchanged (768,903 sections, zero residuals exceeding the move, zero sign flips, zero flat sections made to move, decomposition exact on 700,913).
+
+## WORKING RESULTS: the Big R disclosure decision (NOT YET VERIFIED)
+
+**Status: exploratory.** These came out of scratch analysis, not a pipeline script, and nothing here has been validated against filings. Treat every number as provisional. Scripts are not committed; they were run from a scratch directory and are reproducible from the description below in about twenty lines of `dplyr` plus `glm`.
+
+**The question.** A restatement can be escalated to a formal 8-K Item 4.02 non-reliance filing (a "Big R") or handled as a revision without one (a "little r"). That choice *is* the materiality determination, made by the preparer and auditor and filed with the SEC. So unlike the silent-revision statistic, which infers the judgement from an absence, this observes it directly. Does the cash flow statement get escalated like the income statement?
+
+**Sample.** AA restatement-file events matched to the panel, n = 6,865, of which 36.9% are Big R. The adjustment file is excluded because `002a` forces `restate = 0` there, which would pack the little-r class with a third and less material tier.
+
+### Result 1: the level gap, which is the main finding
+
+| group AA cited | n | Big R |
+|---|---|---|
+| **cash flow error ONLY** (sole failure) | 575 | **8.7%** |
+| cash flow error + other failures | 393 | 14.2% |
+| income statement error only | 498 | 34.1% |
+| income statement error + other | 587 | 42.2% |
+| **neither** (debt, tax, accruals, ...) | 4,812 | **41.7%** |
+
+The last row is the falsification control and it is what makes this persuasive: debt and equity *classification* errors escalate at 41.7%, cash flow *classification* errors at 8.7%. Same database, same coding scheme, same kind of error, 5x difference. So this is not "technical classification issues are treated lightly in general" -- it is specific to the cash flow statement.
+
+### Result 2: it holds at matched error magnitude
+
+Magnitude is each statement's own error scaled by assets (`H - Assets ($)`, measured during the restated period), from AA's `chg_ni` for income and our `cfo_change` for cash flow:
+
+| own-statement error size | I/S Big R | SCF Big R |
+|---|---|---|
+| 0 | 28.5% | 7.0% |
+| 0-0.1% of assets | 36.7% | 4.8% |
+| 0.1-0.5% | 37.0% | 4.9% |
+| 0.5-2% | 49.1% | 17.6% |
+| **>2%** | **80.1%** | **23.8%** |
+
+The SCF sits below the I/S at every size. **A cash flow error above 2% of assets is escalated 20-24% of the time, less often than an income statement error BELOW 2% of assets (32.3%).**
+
+### Result 3: magnitude matters, but 2.5-3.5x less
+
+Matt's prediction that the SCF slope would be flat is **rejected** -- it is significantly positive at every threshold. But the differential is large and robust (difference-in-differences, all p < 1e-6): the low-to-high jump is +8.3pp (SCF) vs +26.5pp (I/S) at a 0.1% threshold, and +13.3 vs +47.4 at 2%. In standardised per-SD logits with no controls, income magnitude gives 0.281 (z = 6.2) against cash flow 0.033 (z = 1.3), and a Wald test separates them at p = 0.0008. In logs the cash flow coefficient turns slightly negative.
+
+**Methodological trap, recorded because it will recur.** Do NOT present the magnitude-by-statement interaction as a logit. Logit coefficients are normalised by the latent residual variance, and the two groups have base rates of 11% vs 39%, so the cross-group comparison is destroyed: the logit interaction reads 0.042 (p = 0.89), a clean null, while average marginal effects on the same data give **+1.9pp per SD (SCF) vs +19.3pp (I/S)**, a 10x gap. Use a linear probability model or marginal effects.
+
+**Controls are deliberately omitted.** ICMW runs 5.3% to 49.9% from little r to Big R and SEC inquiry 0.9% to 6.9%; these are plausibly *consequences* of the non-reliance decision, so conditioning on them conditions on the outcome.
+
+### What still has to be checked
+
+- **Provenance asymmetry.** Income magnitude is AA's reported figure; cash flow magnitude is our XBRL measurement. The fix is to measure the income change ourselves -- see the dNI test above, which shows this works and needs no re-extraction.
+- **`chg_ni` zeros** (validation item 12) contaminate the low-magnitude bin: 67% of events have `chg_ni == 0`, conflating "no income effect" with "never quantified".
+- **Multi-year truncation** understates our cash flow magnitudes for long windows (see the dNI test), so Result 2 and Result 3 are conservative.
+- **Selection.** Everything conditions on disclosure. If firms hide cash flow errors, the ones reaching AA are the hardest to hide, which biases *against* the finding -- worth stating as a conservative bound rather than a weakness.
+
+### The objection this design cannot answer, and the fix
+
+Scaling both by assets makes the magnitudes comparable in units, not equivalent in economics. A referee will reframe the whole result as "auditors correctly weight net income more because net income is value relevant and cash flow classification is not." That cannot be settled with this data; the answer is normative, from ASC 230's intent -- classification is the SCF's entire purpose, so a classification error defeats the statement even with net income untouched.
+
+**Converting that argument into evidence is the path from a minimum paper to a top-tier one**, and it means showing a CONSEQUENCE for users: return prediction, future cash flow prediction, analyst cash flow forecast errors, and plausibly debt covenant and credit-model settings where CFO is the input. The claim to establish is not "firms treat SCF errors as immaterial" but "firms treat them as immaterial *and users are measurably harmed*." That requires linking revisions to returns and forecasts, so the Compustat/CRSP files already staged under `DATA_PATH` (the `future` tier in `sync-to-onedrive.R`) plus an analyst cash flow forecast source (I/B/E/S) become live inputs rather than placeholders.
 
 ## Limitations of the approach
 

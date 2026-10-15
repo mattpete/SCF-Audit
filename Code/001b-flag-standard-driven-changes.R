@@ -71,6 +71,30 @@ IN_SUFFIX <- "_full"
 # reporting unit is noise.
 MATERIALITY_FLOOR <- 1000
 
+# RELATIVE materiality screen, added alongside the absolute floor rather than
+# replacing it. Every existing column keeps its exact meaning and value; the
+# new `*_rel` columns are parallel, so previously reported figures stay
+# reproducible and both can be reported side by side.
+#
+# WHY IT IS NEEDED. The absolute floor does not remove rounding-precision
+# changes. A filer can re-present the same figure at a coarser unit -- AAR Corp
+# shows ProfitLoss 69,826,000 re-presented as 69,800,000, a $26,000 "change"
+# that is not a revision at all. Measured on the full population: 11.5% of
+# section-subtotal value changes and 19.3% of all line-level value changes are
+# pure rounding, and the floor lets them through because their MEDIAN size is
+# $4,580 against a $1,000 floor, while their median relative size is 0.013%.
+#
+# A section's movement must clear this share of its own as-filed subtotal.
+# 0.001 = 0.1%, which removes most rounding while keeping 90.2% of the clean
+# sample's unexplained revisions. The silent share barely moves (80.0% -> 79.1%
+# at 0.1%, 75.3% even at 5%), so rounding inflates the revision COUNT rather
+# than the silent SHARE.
+REL_FLOOR <- 0.001
+
+# Powers of ten tested by the rounding-equivalence check: a change is "pure
+# rounding" when the later value equals the original rounded to one of these.
+ROUNDING_UNITS <- c(1e2, 1e3, 1e4, 1e5, 1e6)
+
 # Periods at or before this fiscal year sit in the XBRL phase-in era, when tag
 # churn reflects filers being onboarded to XBRL and the taxonomy being cleaned
 # up rather than any accounting change (FY2011 taxes/impairment, FY2012 stock
@@ -299,7 +323,24 @@ lc_flagged <- lc |>
     # not attributable to a standard but is not clean evidence either
     era = case_when(fy <= EARLY_XBRL_FY_MAX ~ "early XBRL phase-in",
                     fy >= CENSORED_FY_MIN   ~ "censored right edge",
-                    TRUE                    ~ "clean"))
+                    TRUE                    ~ "clean"),
+    # Pure rounding: the comparative value IS the original rounded to a coarser
+    # unit, so the fact did not change -- only its reported precision did. Only
+    # meaningful for a value change; an Added or Dropped line is a real
+    # presentation change whatever the amount.
+    is_rounding_change = coalesce(change_type, "Unchanged") == "Value change" &
+      !is.na(orig_val) & !is.na(comp_val) & orig_val != 0 &
+      Reduce(`|`, lapply(ROUNDING_UNITS,
+                         function(u) comp_val == round(orig_val / u) * u)))
+
+cat("\n=== rounding-precision changes (not revisions) ===\n")
+print(lc_flagged |>
+  filter(coalesce(change_type, "Unchanged") == "Value change") |>
+  summarise(value_changes = n(),
+            pure_rounding = sum(is_rounding_change),
+            pct = round(100 * mean(is_rounding_change), 1),
+            median_abs_usd = median(abs(difference[is_rounding_change]))))
+cat("These clear MATERIALITY_FLOOR on size but are presentation, not revision.\n")
 
 cat("\n=== component changes attributed to a standard ===\n")
 print(lc_flagged |>
@@ -321,6 +362,12 @@ section_std <- lc_flagged |>
     n_std_changed    = sum(is_standard_driven, na.rm = TRUE),
     n_other_changed  = sum(!is_standard_driven &
                              coalesce(change_type, "Unchanged") != "Unchanged", na.rm = TRUE),
+    # rounding bookkeeping, so a section whose only movement is re-rounding can
+    # be identified downstream without re-reading the line file
+    n_rounding_changed = sum(is_rounding_change, na.rm = TRUE),
+    n_other_changed_nonround = sum(!is_standard_driven & !is_rounding_change &
+                             coalesce(change_type, "Unchanged") != "Unchanged", na.rm = TRUE),
+    rounding_difference = sum(difference[is_rounding_change], na.rm = TRUE),
     standards        = paste(sort(unique(na.omit(standard[is_standard_driven]))),
                              collapse = " + "),
     std_impacts      = paste(sort(unique(na.omit(impact[is_standard_driven]))),
@@ -332,7 +379,14 @@ section_std <- lc_flagged |>
 scf_section_adjusted <- sc |>
   left_join(section_std, by = c("cik", "start", "end", "section")) |>
   mutate(
-    across(c(std_difference, other_difference, n_std_changed, n_other_changed),
+    # A section in `sc` with no component rows in `lc_flagged` gets NA from the
+    # join, so every count must be coalesced here or it poisons the period-level
+    # sums. Omitting the three rounding columns below made 2,689 periods read as
+    # "Intra-section reclass" under the relative screen when the absolute screen
+    # said "No change" -- i.e. the screen appeared to ADD movement, which it can
+    # never do.
+    across(c(std_difference, other_difference, n_std_changed, n_other_changed,
+             n_rounding_changed, n_other_changed_nonround, rounding_difference),
            ~ coalesce(.x, 0)),
     # THE ADJUSTMENT MUST ONLY EVER EXPLAIN MOVEMENT AWAY, NEVER CREATE IT.
     #   A naive `subtotal_difference - std_difference` fails that test. Where a
@@ -361,7 +415,45 @@ scf_section_adjusted <- sc |>
       !subtotal_material   ~ "no movement",
       std_explains_all     ~ "explained by standard",
       any_standard         ~ "partly standard, residual remains",
-      TRUE                 ~ "unexplained (candidate revision)"))
+      TRUE                 ~ "unexplained (candidate revision)"),
+
+    # --- parallel RELATIVE screen (additive; nothing above is altered) -------
+    # Share of the section's own as-filed subtotal that moved. NA where the
+    # as-filed subtotal is zero, because a move away from zero has no
+    # meaningful relative size -- those default to KEPT, since dropping what
+    # cannot be assessed would bias the screen.
+    subtotal_rel = if_else(abs(subtotal_orig) > 0,
+                           abs(subtotal_difference) / abs(subtotal_orig),
+                           NA_real_),
+    unexplained_rel = if_else(abs(subtotal_orig) > 0,
+                              abs(unexplained_difference) / abs(subtotal_orig),
+                              NA_real_),
+    subtotal_material_rel =
+      subtotal_material & coalesce(subtotal_rel >= REL_FLOOR, TRUE),
+    unexplained_material_rel =
+      unexplained_material & coalesce(unexplained_rel >= REL_FLOOR, TRUE),
+    # the section moved, but every changed line was a re-rounding
+    all_movement_is_rounding = n_changed > 0 &
+      n_rounding_changed > 0 & n_other_changed_nonround == 0 & n_std_changed == 0,
+    std_explains_all_rel = subtotal_material_rel & !unexplained_material_rel,
+    section_verdict_rel = case_when(
+      !recon_testable          ~ "not testable",
+      all_movement_is_rounding ~ "rounding only",
+      !subtotal_material_rel   ~ "no movement",
+      std_explains_all_rel     ~ "explained by standard",
+      any_standard             ~ "partly standard, residual remains",
+      TRUE                     ~ "unexplained (candidate revision)"))
+
+cat("\n=== section verdict: absolute floor vs + relative screen ===\n")
+print(scf_section_adjusted |> count(section_verdict, section_verdict_rel) |>
+  pivot_wider(names_from = section_verdict_rel, values_from = n,
+              values_fill = 0L) |> as.data.frame())
+cat("\nunexplained candidate sections  absolute:",
+    format(sum(scf_section_adjusted$section_verdict ==
+                 "unexplained (candidate revision)"), big.mark = ","),
+    "| with relative screen:",
+    format(sum(scf_section_adjusted$section_verdict_rel ==
+                 "unexplained (candidate revision)"), big.mark = ","), "\n")
 
 
 # 7. Period-level rollup -------------------------------------------------------
@@ -382,6 +474,11 @@ scf_period_adjusted <- scf_section_adjusted |>
     n_other_changed_lines = sum(n_other_changed),
     n_sections_testable = sum(recon_testable, na.rm = TRUE),
     all_sections_testable = all(recon_testable, na.rm = TRUE),
+    # parallel relative/rounding bookkeeping
+    n_rounding_lines = sum(n_rounding_changed),
+    n_other_changed_lines_nonround = sum(n_other_changed_nonround),
+    n_sections_moved_rel = sum(unexplained_material_rel, na.rm = TRUE),
+    n_sections_rounding_only = sum(all_movement_is_rounding, na.rm = TRUE),
     .groups = "drop")
 
 # carry the era label (one row per period; `era` is a function of fy alone)
@@ -405,7 +502,27 @@ scf_period_adjusted <- scf_period_adjusted |>
       n_sections_moved_unexplained == 0 & n_other_changed_lines == 0 ~ "No change",
       n_sections_moved_unexplained == 0                     ~ "Intra-section reclass",
       abs(net_unexplained) < MATERIALITY_FLOOR              ~ "Cross-section reclass",
+      TRUE                                                  ~ "Net cash flow change"),
+    # Parallel taxonomy under the relative screen. Keyed on sections that clear
+    # the relative floor and on NON-ROUNDING line changes, so a period whose
+    # only movement was a re-rounding lands in "No change" instead of
+    # "Intra-section reclass".
+    period_type_adjusted_rel = case_when(
+      n_sections_moved_rel == 0 & n_other_changed_lines_nonround == 0 ~ "No change",
+      n_sections_moved_rel == 0                             ~ "Intra-section reclass",
+      abs(net_unexplained) < MATERIALITY_FLOOR              ~ "Cross-section reclass",
       TRUE                                                  ~ "Net cash flow change"))
+
+cat("\n=== period type: absolute floor vs + relative screen ===\n")
+print(scf_period_adjusted |> count(period_type_adjusted, period_type_adjusted_rel) |>
+  pivot_wider(names_from = period_type_adjusted_rel, values_from = n,
+              values_fill = 0L) |> as.data.frame())
+cat("\nperiods reclassified to 'No change' by the relative screen:",
+    format(sum(scf_period_adjusted$period_type_adjusted != "No change" &
+               scf_period_adjusted$period_type_adjusted_rel == "No change"),
+           big.mark = ","), "\n")
+cat("periods whose only movement was rounding:",
+    format(sum(scf_period_adjusted$n_sections_rounding_only > 0), big.mark = ","), "\n")
 
 
 # 8. Save ----------------------------------------------------------------------

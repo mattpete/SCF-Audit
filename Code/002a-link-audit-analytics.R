@@ -239,6 +239,16 @@ scf_filing_with_aa <- fs |>
     # NOT attributable to an accounting standard.
     revision = any_change & any_unexplained,
 
+    # Same population under 001b's RELATIVE screen, which additionally requires
+    # the section to have moved by more than REL_FLOOR of its own as-filed
+    # subtotal and excludes periods whose only movement was a rounding-precision
+    # change. Reported alongside `revision`, never instead of it: 11.5% of
+    # section-subtotal value changes are pure re-roundings whose median size
+    # ($4,580) clears the absolute $1,000 floor, so the absolute screen inflates
+    # the revision COUNT. It turns out to barely move the silent SHARE, which is
+    # the headline -- see section 8.
+    revision_rel = any_change & any_unexplained_rel,
+
     # Was that revision disclosed through either channel?
     disclosure_status = case_when(
       !revision                                   ~ "No unexplained revision",
@@ -248,6 +258,7 @@ scf_filing_with_aa <- fs |>
       TRUE                                         ~ "SILENT: no AA, no amendment"),
 
     silent_revision = revision & !aa_match & !has_amendment,
+    silent_revision_rel = revision_rel & !aa_match & !has_amendment,
 
     # Narrower still: AA logged the event but never characterised it as a cash
     # flow problem, so the SCF nature of it is absent from AA even though the
@@ -295,6 +306,40 @@ print(rev |> summarise(
   aa_flagged_cash_flow   = sum(aa_flagged_cash_flow),
   pct_aa_flagged_cf      = round(100*mean(aa_flagged_cash_flow), 1),
   amendment_only         = sum(!aa_match & has_amendment)))
+
+cat("\n=== HEADLINE BOTH WAYS: absolute floor vs + relative screen ===\n")
+cat("The relative screen removes rounding-precision changes, which clear the\n")
+cat("$1,000 absolute floor (median re-rounding is $4,580) but are presentation\n")
+cat("rather than revision. Report both; neither replaces the other.\n")
+print(bind_rows(
+  clean |> filter(revision) |> summarise(
+    screen = "absolute floor only", revisions = n(),
+    silent = sum(silent_revision), pct_silent = round(100*mean(silent_revision), 1),
+    in_aa = sum(aa_match), pct_in_aa = round(100*mean(aa_match), 1),
+    aa_called_it_cf = sum(aa_flagged_cash_flow)),
+  clean |> filter(revision_rel) |> summarise(
+    screen = "+ relative screen", revisions = n(),
+    silent = sum(silent_revision_rel),
+    pct_silent = round(100*mean(silent_revision_rel), 1),
+    in_aa = sum(aa_match), pct_in_aa = round(100*mean(aa_match), 1),
+    aa_called_it_cf = sum(aa_flagged_cash_flow))) |> as.data.frame())
+
+cat("\n=== silent share by RELATIVE size of the move (no screen needed) ===\n")
+# The version of the claim that is immune to the rounding objection outright,
+# because it conditions on relative magnitude instead of screening on it.
+print(clean |> filter(revision) |>
+  mutate(max_rel = pmax(
+      if_else(abs(cfo_as_filed) > 0, abs(cfo_unexplained)/abs(cfo_as_filed), 0),
+      if_else(abs(cfi_as_filed) > 0, abs(cfi_unexplained)/abs(cfi_as_filed), 0),
+      if_else(abs(cff_as_filed) > 0, abs(cff_unexplained)/abs(cff_as_filed), 0)),
+    bin = cut(max_rel, c(-Inf, 1e-4, 1e-3, 1e-2, 1e-1, Inf),
+              labels = c("<0.01%", "0.01-0.1%", "0.1-1%", "1-10%", ">10%"))) |>
+  group_by(bin) |> summarise(n = n(),
+    pct_silent = round(100*mean(silent_revision), 1),
+    pct_in_aa = round(100*mean(aa_match), 1), .groups = "drop") |>
+  as.data.frame())
+cat("Even revisions above 10% of the section subtotal are mostly silent, which\n")
+cat("is the claim to report beside the pooled figure.\n")
 
 cat("\n=== does AA catch the CROSS-SECTION reclassifications specifically? ===\n")
 print(clean |> filter(revision) |>

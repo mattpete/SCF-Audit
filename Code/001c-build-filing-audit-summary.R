@@ -153,7 +153,12 @@ ps  <- read_parquet(glue("{data_path}scf_period_summary{IN_SUFFIX}.parquet")) |>
          n_amendments, has_amendment)
 pa  <- read_parquet(glue("{data_path}scf_period_adjusted{IN_SUFFIX}.parquet")) |>
   select(cik, start, end, period_type_adjusted, standards_involved, era,
-         net_unexplained)
+         net_unexplained,
+         # Parallel relative/rounding screen from 001b. Additive: every column
+         # above keeps its original meaning and value, so previously reported
+         # figures stay reproducible and both screens can be reported together.
+         period_type_adjusted_rel, n_rounding_lines, n_sections_rounding_only,
+         n_sections_moved_rel, n_other_changed_lines_nonround)
 
 # EDGAR filing index, so a row can be checked without constructing a URL
 edgar_url <- function(cik, accn) {
@@ -189,6 +194,13 @@ scf_filing_summary <- anchors |>
     any_unexplained = abs(coalesce(cfo_unexplained,0)) >= MATERIALITY_FLOOR |
                       abs(coalesce(cfi_unexplained,0)) >= MATERIALITY_FLOOR |
                       abs(coalesce(cff_unexplained,0)) >= MATERIALITY_FLOOR,
+    # The same test under the relative screen: a section must also have moved
+    # by more than REL_FLOOR of its own as-filed subtotal, and a period whose
+    # only movement was a re-rounding does not count. Reported ALONGSIDE
+    # `any_unexplained`, never in place of it.
+    any_unexplained_rel = coalesce(n_sections_moved_rel, 0L) > 0,
+    rounding_only = coalesce(n_sections_rounding_only, 0L) > 0 &
+                    coalesce(n_other_changed_lines_nonround, 0L) == 0,
     orig_url  = edgar_url(cik, orig_accn),
     comp_url  = edgar_url(cik, comp_accn),
     amend_url = edgar_url(cik, amend_accn)) |>
@@ -202,7 +214,9 @@ scf_filing_summary <- anchors |>
     n_periods_this_filing,
     # the headline flags
     any_change, n_sections_changed, n_tags_changed, any_unexplained,
-    period_type, period_type_adjusted, correction_channel, standards_involved,
+    any_unexplained_rel, rounding_only, n_rounding_lines,
+    period_type, period_type_adjusted, period_type_adjusted_rel,
+    correction_channel, standards_involved,
     # operating
     cfo_as_filed, cfo_latest, cfo_change, cfo_std, cfo_unexplained,
     cfo_changed, cfo_n_tags, cfo_verdict, cfo_changed_tags,
