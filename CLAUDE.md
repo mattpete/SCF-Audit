@@ -2,6 +2,34 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Start here if you are new to this project
+
+**Collaborators:** Matt Peterson (lead) and Andrew Clark (PhD student, joined Oct 2026).
+
+**What this is.** An archaeology of the Statement of Cash Flows. For every 10-K/10-Q since 2009 we reconstruct the SCF *as originally filed*, compare it against the same period *as re-presented in later filings*, strip out changes the FASB required, and ask whether anything left over was ever disclosed. It turns out most of it was not.
+
+**State of play (Oct 2026).** The pipeline is built and has been run on the full population: 13,961 filers, 339,054 filings, 21.1M SCF line rows. The headline result exists — **80% of unexplained SCF revisions are silent** (no amendment, no Audit Analytics record). What is NOT done is validation: see the checklist below, where item 1 is the only thing that could invalidate the result rather than merely refine it.
+
+**You cannot run anything until two data paths exist.** The repo holds code only; all data lives outside it and none of it is committed.
+
+1. Create `.Renviron` at the repo root (gitignored, machine-specific):
+   ```
+   DATA_PATH = "C:/.../Cash Flow Audit Idea/Data/"
+   XBRL_DATA_PATH = "D:/XBRL/XBRL Extracted Data/"
+   ```
+   Trailing slashes matter — the scripts paste paths together directly.
+
+2. `XBRL_DATA_PATH` needs the SEC **Financial Statement Data Sets**, 86 periods from 2009 Q1 to 2023 M12 (quarterly through 2020 Q3, monthly after). The live scripts read only `{period}_num.parquet`, `{period}_pre.parquet` and `{period}_sub.parquet` — about 6.2 GB. The `.tsv` originals and the `tag` files are also there but unused by the live chain.
+
+3. `DATA_PATH` needs two **licensed Audit Analytics** exports, which must come from Matt (not redistributable): `restatement-data-031425.xlsx` and `adjustment-data-021626.xlsx`. It is also where every pipeline output is written.
+
+   `GAAP_Taxonomy.xlsx` lives there too but **no live script reads it any more** — only `legacy/process-GAAP-taxonomy.R` does.
+
+**Reading order.** Data pipeline lineage (what runs in what order) → Phase 1 detection design (the hard part, and why each rule exists) → Phase 2 design → Audit Analytics link → Current status → Validation checklist.
+
+**The one rule that will save you time.** Nearly every non-obvious rule in `001a` and `001b` exists because a specific filing broke the obvious version, and that counter-example is named in the comment beside it. Before simplifying anything, read the cited case — the simpler approach is usually what was tried first and found wrong. The same goes for the figures in this file: they are measured, not estimated, so if your run disagrees, something changed and it is worth finding out what.
+
+
 ## Project overview
 
 This is an academic accounting/finance research project (R), studying how SEC filers correct/restate the Statement of Cash Flows (SCF) and related financial statement line items (Net Income, Stockholders' Equity, Assets, Liabilities) across 10-K/10-Q filings, revisions, and amendments (10-K/A, 10-Q/A). It builds firm-period panels from SEC XBRL data and cross-references them against Audit Analytics restatement/adjustment data.
@@ -59,11 +87,11 @@ Scripts are numbered by research goal: `001x` builds the SCF revision dataset fr
 | `001a-extract-scf-lines-and-changes.R` | extracts every SCF line from the raw SEC datasets and detects what changed between as-filed and latest presentation | ~33 min (checkpointed, resumable) |
 | `001b-flag-standard-driven-changes.R` | attributes changes to the standards that required them and subtracts them, leaving an unexplained residual per section | ~2 min |
 | `001c-build-filing-audit-summary.R` | collapses to one row per filing-period and writes the hand-audit samples | ~1 min |
-| `002a-build-audit-analytics-sample.R` | merges Audit Analytics restatement/adjustment data | — |
+| `002a-link-audit-analytics.R` | left-joins Audit Analytics onto the filing panel; identifies silent revisions | ~1 min |
 
 Only `001a` touches the raw 6.2 GB of SEC files; everything after it reads parquet, so `001b`/`001c` can be re-run freely after any logic change.
 
-**`002a` is not yet wired to this chain.** It still reads `xbrl_all_tsv.parquet` from the superseded `legacy/extract-all-tags-from-XBRL-tsv.R`, not `001b`'s output. Repointing it at `scf_period_adjusted_full.parquet` — and revisiting the join, since the grain and column names differ — is the next substantive task.
+All four live scripts are wired together: `002a` reads `001c`'s filing panel (`scf_filing_summary_full.parquet`) plus the two Audit Analytics exports. An earlier version of `002a` consumed `xbrl_all_tsv.parquet` from the now-superseded `legacy/extract-all-tags-from-XBRL-tsv.R` and ran AA-anchored; that version is in git history only.
 
 **`Code/legacy/`** (not run; numeric prefixes dropped because the old numbering no longer applies):
 - `extract-all-tags-from-XBRL-tsv.R` (was `001c`) — the predecessor extractor; still generates the `xbrl_all_tsv.parquet` that `002a` currently consumes.
@@ -92,7 +120,8 @@ Detects changes between the SCF **as originally filed** and the SCF **as later r
 - **Income build-up collapse — conditional, decided by the filing's own arithmetic.** The top of the operating section is *sometimes* a nested build-up (net income → discontinued ops → income from continuing operations) where only the last line feeds the subtotal; collapsing it to one `[Income starting point]` line prevents double counting and stops a filer simplifying the build-up from manufacturing a false change (Walmart FY2016). But it is **not always nested**: Akorn presents net income *and* a discontinued-ops adjustment as two genuine parallel components with no "continuing operations" line, and its section foots only when both are counted — collapsing unconditionally discarded net income and blew a 21,461 hole in the reconciliation. So the collapse is applied only where a section does *not* foot with every line counted but *does* foot once collapsed, and is applied to both sides together if either needs it.
 - **Zero-value adds/drops are not changes** — `difference` is tested before presence.
 - **Tag substitution** (a line relabelled to a different element at the same amount) is flagged, not counted as an economic change.
-- The GAAP taxonomy **Calculation linkbase was evaluated and rejected** for identifying aggregates: it describes the standard hierarchy, not the filer's, and mislabels ordinary leaf lines (e.g. `IncreaseDecreaseInAccruedLiabilities`) as aggregates.
+- The **GAAP taxonomy's** Calculation sheet (in `GAAP_Taxonomy.xlsx`) was evaluated and rejected for identifying aggregates: it describes the *standard* hierarchy, not the filer's, and mislabels ordinary leaf lines (e.g. `IncreaseDecreaseInAccruedLiabilities`) as aggregates.
+- **CORRECTION, and a real opportunity.** Earlier notes (and the comment block in `001a` Section 3) claim the SEC Financial Statement Data Sets "do not publish" filer calculation relationships. **That is wrong.** The datasets include a per-period `cal` file giving each filing's own calculation linkbase — `adsh`, `ptag` (parent), `ctag` (child), `negative` (sign) — which is exactly the authoritative parent/child structure the conditional income-block collapse currently infers heuristically from whether a section foots. Only one orphan quarter of it is downloaded locally (`cal.parquet` / `cal.tsv` with no period prefix, 3,601 filings, period ending 2023-03-31). Downloading `cal` for all 86 periods would let nested subtotals be resolved from the filer's own arithmetic instead of a heuristic, and is probably the highest-value single improvement available to `001a`.
 
 **Reconciliation is the coverage test**, per the project's own logic: within a section, component differences must sum to the subtotal difference. It is only a fair test when both filings' own statements foot **and** the section boundaries are unambiguous — `recon_testable = both_sides_foot & !section_ambiguous` is that gate. Note `section_foots()` drops rows whose section is `other`/`NA`, so a side contributing no rows for a section yields no footing row at all; unknown footing must therefore default to **FALSE**. Defaulting it to TRUE (as an earlier version did) declared sections fair tests when footing was never established and inflated the pass denominator — the visible symptom was sections whose subtotal moved while not one component changed (Ryder FY2018 investing: the original supplied components via the comparative's section label but no subtotal of its own, so the subtotal read as a $2.8bn "Added" from zero). Where they foot and reconciliation still fails, the script is missing a line; where they don't, the filing's own XBRL is defective — itself a finding. A confirmed example: Walmart's Q2 FY2019 10-Q omits `ProceedsFromIssuanceOfLongTermDebt` (15,851M) from its tagged SCF entirely — the value exists in `num` but `pre` assigns it to a note, not `stmt == "CF"`, and the statement jumps from short-term debt straight to repayments.
 
@@ -234,15 +263,15 @@ Every pipeline script (`001`, `001b`, `001c`, `legacy/process-GAAP-taxonomy.R`) 
 - `iprx == "0"` and `uom == "USD"` are required quality filters on the raw `num.tsv`.
 - CIKs are always zero-padded to 10 digits (`str_pad(..., width = 10, pad = "0")`) to join consistently across sources (XBRL, Audit Analytics).
 
-### Downstream: audit sample construction
+### Audit Analytics source data
 
-`002a-build-audit-analytics-sample.R` is the consumer of the XBRL panel output (`xbrl_all_tsv.parquet` from `001c`). It loads Audit Analytics restatement (`restatement-data-*.xlsx`) and adjustment (`adjustment-data-*.xlsx`) exports, dedupes/combines them (restatements take priority over adjustments on cik/file_date conflicts), then left-joins XBRL periods whose `end` date falls within each restatement's `[misstate_begin, misstate_end]` window (`join_by(cik, between(...))`). YTD figures (CFO/CFI/CFF/NI) are deduplicated to one row per fiscal year before summing across a restatement's window, since summing raw YTD quarters would double-count.
+Two licensed exports in `DATA_PATH`, read by `002a`: `restatement-data-031425.xlsx` (21,815 rows) and `adjustment-data-021626.xlsx` (3,892 rows). Both are cleaned the same way — materiality, big-4, fraud, ICMW, SEC-inquiry and cash-flow-failure indicators derived from the raw fields — then deduplicated on `(cik, file_date)` with a formal restatement outranking an adjustment, and combined into 17,703 events (`aa_cleaned.parquet`). AA's own label for the phenomenon this project studies is the string `"Cash flow statement (SFAS 95) classification errors"` inside the pipe-delimited failures field; `cfr`/`aa_flagged_cash_flow` is derived from it. 1,772 of the cleaned events carry it. See the Audit Analytics link section for the join itself.
 
 ### `Code/000-utilities-functions.R`
 
 A general-purpose R helper library sourced by other scripts, not specific to any one pipeline stage: variable transforms (`winsorize_x`, `truncate_x`, `standardize_x`), Fama-French 12/49 industry classification from SIC codes (`assign_FF12`, `assign_FF49`), logistic regression holdout/performance helpers built for `rsample`/`broom` workflows, LaTeX/`modelsummary` formatting helpers, and an event-study trading-day window function (`trading_day_window`). Also sets global R options (no scientific notation, `America/New_York` timezone for date handling).
 
-## Current status (as of 2026-09-22)
+## Current status (as of 2026-10-15)
 
 **Full population extracted and analysed, with the section-assignment fixes applied.** Run took 32.95 min end to end (extract rebuild + analysis), 14.4 GB peak on a 127 GB machine — comfortably in memory, no chunking needed.
 
@@ -265,17 +294,64 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 
 **All three pieces of the headline claim now exist:** (a) detect SCF revisions (`001a`), (b) strip standard-driven ones (`001b`), (c) show the survivors are absent from Audit Analytics (`002a`). **Result: 80.0% of unexplained SCF revisions in the clean sample are silent** — no AA record and no amendment — and only 6.3% are characterised by AA as a cash-flow failure. The rate is flat across filer size, so it is not a micro-cap artifact.
 
-1. **Repoint the Audit Analytics merge at `001b`'s output.** `002a-build-audit-analytics-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`; it needs to read `scf_period_adjusted_full.parquet` instead, and the join logic revisited since the grain and column names differ. The deliverable is the proportion of unexplained revisions that Audit Analytics never recorded.
-2. **Sample construction**, now decidable because the numbers exist: drop financials (SIC 6000-6999) and probably utilities; decide on the 20.8% non-testable and 6.6% ambiguous sections; truncate the panel to the clean era (roughly FY2013–2021, excluding early-XBRL and the censored right edge).
-3. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%), worth a footnote rather than more engineering.
+**The build is done; validation is what remains.** Next steps, in priority order:
+
+1. **Confirm silent revisions are real revisions** — see Validation checklist item 1. Nothing else matters until this holds.
+2. **Sample construction**, now decidable because the numbers exist: drop financials (SIC 6000-6999) and probably utilities; decide what to do with the 20.8% non-testable and 6.6% ambiguous sections; truncate the panel to the clean era (roughly FY2013–2021, excluding early-XBRL phase-in and the censored right edge).
+3. **Download the per-period `cal` files** and replace the heuristic income-block collapse with the filer's own calculation linkbase (see the CORRECTION bullet under Phase 1 design). Highest-value engineering improvement available.
+4. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%) — a footnote rather than more engineering.
+
+### Hand-audit in progress
+
+`001c` writes `audit_sample_changed.csv` and `audit_sample_unchanged.csv` to `DATA_PATH` (120 cases each, seed 20260922, drawn only from testable clean-era periods). Each row carries both filings' accession numbers and **EDGAR index URLs**, the three section totals as filed and as latest presented, and a readable string of every changed tag with before/after amounts. Matt is working through these. In the *changed* sample the named tags should differ between the two linked filings; in the *unchanged* sample all three section totals should be identical in both. Disagreements are the most valuable output — they test the logic from outside.
+
 
 **Known stale items:** the header comment block at the top of `001a` still describes the earlier two-anchor design (two anchor filings, a single `negating` rule, a `scf_lines_raw.parquet` output) — the body is current. The 451 MB of parts still sit in Dropbox and will sync to coauthors despite being rebuildable in ~31 min.
+
+## Validation checklist
+
+What has actually been verified, and what the results still rest on that nobody has checked. Kept honest on purpose: the measured figures above are solid, but the list below is where the risk lives.
+
+### Already verified
+
+- Walmart FY2012–16 and Akorn 2011–14 reproduce the hand-built `Examples.xlsx` exactly (all 15 Walmart section-periods at `recon_diff = 0`). `Examples.xlsx` is committed to the repo, so this is re-checkable.
+- Akorn FY2014, a documented restatement (AA `restatement_key` 48887), is correctly **not** excluded by the standards logic.
+- Reconciliation: 600,144 of 603,168 testable sections (99.5%) tie.
+- `001b` arithmetic: four in-script sanity checks pass — no residual exceeds the original move, no sign flips, no flat section made to move, decomposition exact on all 700,913 reconciling sections.
+- Merge rule: the silent share is 73–93% across seven alternative join definitions, with the chosen rule near the conservative end.
+
+### Critical — could change the headline
+
+1. **Are silent revisions actually revisions?** No validation exists. Sample ~30 `silent_revision == TRUE` cases, open both filings, confirm the numbers genuinely differ and no disclosure exists. If a meaningful share are tagging artifacts rather than real revisions, 80% is wrong. **Nothing else on this list substitutes for it.**
+2. **The 240-case hand audit** (in progress) — validates the detection layer generally.
+3. **The 20.8% not-testable sections** (108,598 non-footing, 50,375 ambiguous, 6,762 unknown) are excluded from every headline figure and have never been hand-checked. If they contain real revisions we are *understating*; if noise, fine — currently unknown.
+
+### Standards layer — affects the size of the residual
+
+4. **ASC 842's `"Lease"` pattern** spans 3,163 tags and is the acknowledged most over-inclusive entry. Never measured how many genuine revisions it swallows; over-exclusion *understates* the silent count.
+5. **ASU window boundaries** are set from observed spikes. Akorn proved a too-wide window falsely excludes a real restatement. Sample excluded-by-standard cases and read the filings.
+6. **ASU 2016-15 excluded on "no wave" evidence** — defensible, but absence of a population-level wave does not prove absence of individual reclassifications.
+7. **Is the five-standard list exhaustive?** The detector found ASC 606 and ASU 2016-01 that were missed by hand, which is evidence the list *can* be incomplete. Remaining spikes were never worked through systematically.
+
+### Audit Analytics link
+
+8. **The 65.1% reverse-coverage rate.** The claim that the 35% gap is "AA covering filers and periods the panel does not" was **never verified** — it could equally be a join defect. Straightforward to decompose.
+9. **AA's `cfr` flag** is trusted as "AA identified this as a cash flow issue" and never spot-checked against what the pipeline detects.
+10. **The row-G objection.** 69% of silent-revision firms appear in AA for *other* periods. That is the strongest available criticism and needs to become an explicit argument — AA had the firm on its radar and still did not capture this revision — rather than a footnote. Both 30.5% and 80.0% are true statements about the same data depending on the merge rule.
+11. **AA dedup on `(cik, file_date)`** keeps restatement over adjustment and most-material; could be discarding relevant records.
+
+### Design choices never tested
+
+12. **Last amendment vs first** as the anchor (`legacy/process-GAAP-taxonomy.R` used first; `n_amendments` is carried so this is testable).
+13. **Whether /A filings' comparative columns** should count toward the silent channel (currently excluded).
+14. **`is_tag_substitution`** — never checked that it catches real renames without over-catching coincidentally equal values.
+15. **The 2022+ censoring claim** was *inferred* from tag deaths, not verified by confirming those periods genuinely lack later comparative filings.
 
 ## Roadmap / open tasks
 
 Work here is sequenced in two dependent phases — do not skip ahead to phase 2 without the user's go-ahead:
 
-1. **Phase 1 (built, validated on two companies): accurate SCF change detection.** Implemented in `001a-identify-scf-line-changes.R` (see "Phase 1 detection design" above). Validated against the Walmart hand-built ground truth and against Akorn, a known restatement case. Open items before declaring Phase 1 done:
+1. **Phase 1 (built, validated on two companies): accurate SCF change detection.** Implemented in `001a-extract-scf-lines-and-changes.R` (see "Phase 1 detection design" above). Validated against the Walmart hand-built ground truth and against Akorn, a known restatement case. Open items before declaring Phase 1 done:
    - Validate on more filers. Banks/insurers/REITs are *not* worth hardening against — accounting papers conventionally drop financials (SIC 6000-6999), so those observations get dropped anyway. `sic`/`afs` are carried in the output for that screening.
    - Decide how to treat filings whose own SCF does not foot (`both_sides_foot == FALSE`): exclude, flag, or hand-review. These are a small minority but they are the only place reconciliation fails, and non-footing SCF tagging may itself be evidence for the paper's thesis.
    - Amendments are now a full third anchor (see design above). Two open questions: whether to use the *first* or *last* amendment as the anchor when there are several (currently last, consistent with the latest-attestation convention; `legacy/process-GAAP-taxonomy.R` used first, and `n_amendments` is carried so this can be revisited), and whether comparative columns *inside* an /A filing should also count toward the silent channel (currently they do not — comparatives come only from regular 10-K/10-Q).
@@ -331,7 +407,7 @@ Work here is sequenced in two dependent phases — do not skip ahead to phase 2 
 ## Working with this repo
 
 - Data files (parquet, `.tsv`, `.xlsx` inputs) are never committed — they live under the paths in `.Renviron`, outside the repo. Don't assume they're readable from a fresh checkout without that env file.
-- **`001a-identify-scf-line-changes.R` is the actively maintained script.** Make changes to the original/comparative/amendment detection there. `legacy/process-GAAP-taxonomy.R` is preserved as a fallback and should not be edited without the user's say-so; the JSON lineage (`001`, `001b`) and `002 Create FS from XBRL data.R` are earlier iterations kept for reference.
-- `002a-build-audit-analytics-sample.R` still consumes `xbrl_all_tsv.parquet` from `001c`, **not** `001a`'s output. Repointing it at `scf_period_summary.parquet` is future work and will need the join logic revisited, since the grain and column names differ.
+- **`001a-extract-scf-lines-and-changes.R` is where detection logic lives.** Make changes to the original/comparative/amendment comparison there. `Code/legacy/` is reference only and should not be edited without asking; the JSON lineage and the early full-financial-statement exploration were deleted in the Oct 2026 reorganisation and exist in git history.
+- **Outputs are large and live in Dropbox.** `scf_lines_parts/` alone is 451 MB across 85 files and will sync to every collaborator despite being rebuildable from the raw SEC files in ~33 min. Consider pointing `lines_dir` at local disk. Note also that arrow memory-maps parquet on read, so leaving an output open in RStudio blocks the next run's write on Windows.
 - Every non-obvious rule in `001a` was derived from a specific filing that broke a simpler rule, and the counter-example is cited in the comment beside it. Before "simplifying" any of them — the conditional income-block collapse, the per-line sign resolution, the `cf_periods` restriction — check the cited case, because the obvious simplification is usually what was tried first and found wrong.
 - **Tooling gotcha:** writing an R script via a Bash heredoc in this environment collapses `\\1` to `\1`, so regex backreferences in a replacement string silently become control characters `\x01`/`\x02` — which corrupts output in ways that look like data problems (words losing their first and last letters) rather than a quoting bug. Either use the Write tool for scripts containing backreferences, or avoid them: zero-width lookarounds with a plain replacement work, e.g. `gsub("(?<=[a-z0-9])(?=[A-Z])", " ", x, perl = TRUE)` to split CamelCase.

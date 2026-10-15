@@ -165,12 +165,23 @@ search <- bind_rows(
 
 
 # 3. Note on nested subtotals --------------------------------------------------
-# The GAAP taxonomy's Calculation linkbase was evaluated as a way to identify
-# aggregate lines automatically, but it describes the STANDARD hierarchy, not the
-# filer's own calculation relationships (which the SEC Financial Statement Data
-# Sets do not publish). It mislabels ordinary leaf lines as aggregates -- e.g.
-# IncreaseDecreaseInAccruedLiabilities has children in the standard taxonomy but
-# is a plain line item on Walmart's statement -- so it is not used.
+# The GAAP taxonomy's Calculation sheet (GAAP_Taxonomy.xlsx) was evaluated as a
+# way to identify aggregate lines automatically and rejected: it describes the
+# STANDARD hierarchy, not the filer's own, and mislabels ordinary leaf lines as
+# aggregates -- IncreaseDecreaseInAccruedLiabilities has children in the standard
+# taxonomy but is a plain line item on Walmart's statement.
+#
+# CORRECTION (Oct 2026): an earlier version of this comment claimed the SEC
+# Financial Statement Data Sets do not publish filer calculation relationships.
+# That is WRONG. The datasets include a per-period `cal` file carrying each
+# filing's own calculation linkbase -- adsh, ptag (parent), ctag (child) and
+# `negative` (sign) -- which is precisely the authoritative parent/child
+# structure the conditional collapse below infers heuristically from whether a
+# section foots. Only one orphan quarter is downloaded locally (cal.parquet with
+# no period prefix, 3,601 filings, period ending 2023-03-31). Fetching `cal` for
+# all 86 periods would let nested subtotals be resolved from the filer's own
+# arithmetic rather than inferred, and is likely the highest-value improvement
+# available to this script.
 #
 # In practice the income build-up at the top of the operating section is the only
 # systematic nesting on the face of the cash flow statement, and it is handled
