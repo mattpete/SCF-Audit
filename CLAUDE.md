@@ -287,39 +287,39 @@ AA catches cross-section reclassifications marginally more often than net-cash-f
 
 **Headline results (9,183 of 17,703 AA events match the panel; 65.6% of those whose window ends inside the panel era, reconciling with `002a`'s 65.1%):**
 
-*What the SCF actually did, per AA event:*
+**Most AA restatements have nothing to do with the cash flow statement, and the reporting is built around that.** AA's GAAP failures field is a pipe-delimited list of labels, exactly one of which names this statement — `"Cash flow statement (SFAS 95) classification errors"`, carried as `cfr`. It appears on **1,772 of 17,703 events (10%)**. The rest are debt and warrant issues (3,829), tax (2,402), revenue recognition (2,054), accruals, expense recording and so on.
 
-| verdict | n | share |
+So pooling every AA event and reporting what the SCF did is **not** a statement about cash flow restatements — it mostly measures background tagging churn, because ~78% of all panel periods show some line-level change with no restatement involved. The primary population is therefore `cfr == 1`; everything else is a **control group**.
+
+*What the SCF did, conditioned on AA's own label (matched events: 992 cash-flow, 8,191 other):*
+
+| verdict | AA named cash flow | AA named something else |
 |---|---|---|
-| Intra-section reclass | 4,492 | 48.9% |
-| Net cash flow change | 2,215 | 24.1% |
-| Cross-section reclass | 1,241 | 13.5% |
-| No change | 1,235 | 13.4% |
+| **Cross-section reclass** | **40.4%** | 10.3% |
+| Net cash flow change | 29.7% | 23.4% |
+| Intra-section reclass | 25.1% | 51.8% |
+| No change | 4.7% | 14.5% |
 
-So **about half of all AA-recorded restatements that touch the panel moved SCF line items while leaving every section subtotal intact** — 4,617 events show line movement with no subtotal movement at all. That is the project's phenomenon appearing inside the *disclosed* population.
+**Cross-section reclassification is the discriminating category** — cash moving between operating/investing/financing is what a cash-flow classification error actually looks like — and it is **3.9x commoner** where AA named the cash flow statement. Conversely the "lines moved, subtotals intact" pattern is *more* common in the control group (53.3% vs 25.4%), which is what ordinary tagging churn looks like. An earlier draft of this section pooled the two groups and reported "48.9% intra-section" as a headline; that figure was the control group and has been removed.
 
-*The base rate, which is what makes the rest interpretable.* Line-level change is the norm in this panel, so only the lift over baseline is evidence of anything:
+*The base rate, which is what makes any of this interpretable:*
 
 | basis | n | line changed | **section changed** |
 |---|---|---|---|
 | all panel filing-periods | 267,282 | 77.9% | **16.7%** |
-| fiscal years inside an AA window | 12,971 | 86.1% | **34.5%** |
+| fiscal years inside any AA window | 12,971 | 86.1% | **34.5%** |
+| fiscal years in an AA window, *other* failure only | 11,383 | 85.0% | **30.2%** |
 | fiscal years in an AA *cash-flow-flagged* window | 1,588 | 94.1% | **65.6%** |
 
-**This is the strongest validation evidence in the project, and it needs no hand-auditing.** AA's `cfr` flag is coded by human analysts reading disclosures; our section-change flag is derived from XBRL arithmetic. They are fully independent, and the section-level rate rises monotonically 16.7% → 34.5% → **65.6%**, a 3.9× lift. It also settles a design question empirically: the line-level measure is nearly saturated at baseline (77.9%) and barely discriminates, while the section-level measure separates cleanly — independent support for the existing decision to treat **section-level outcomes as primary and tag-level as diagnostic**.
+**The strongest validation evidence in the project, and it needs no hand-auditing.** AA's `cfr` flag is coded by human analysts reading disclosures; our section-change flag is XBRL arithmetic. Fully independent, and the section-level rate runs 16.7% baseline → 30.2% (other failures) → **65.6%** (cash-flow failures), a 3.9x lift. Note the control group also shows lift (1.8x), which is expected since a restatement of any kind often touches the SCF.
 
-*The accuracy 2x2 (AA's cash-flow flag vs line-level detection):*
+**Ranked across all 32 AA failure labels with 100+ fiscal years, the cash flow label sits at #1** (65.6% section-change rate). The bottom of that table is debt/equity classification (20.0%) and debt/warrants (23.7%), barely above the 16.7% baseline. Our arithmetic independently reproduces AA's human coding *in rank order*, which is a sharper test than any single rate. The script prints the full table; if the cash flow label ever stops ranking at or near the top, the detection logic has broken.
 
-| | n | share |
-|---|---|---|
-| AA silent on CF, we see a change | 7,003 | 76.3% |
-| AA silent on CF, we see nothing | 1,188 | 12.9% |
-| AA flagged CF, we see a change | 945 | 10.3% |
-| AA flagged CF, we see nothing | 47 | 0.5% |
+This also settles a design question empirically: the line-level measure is near saturation at baseline (77.9%) and barely discriminates, while the section-level measure separates cleanly — independent support for treating **section-level outcomes as primary and tag-level as diagnostic**.
 
-Read the top row carefully. At line level it is 7,003 events, but most are within-section reclassifications AA could reasonably decline to call a cash-flow-statement failure. **The version of the claim that survives that objection requires a subtotal to have moved: 2,650 events, of which 2,636 are cross-section or net-change, median absolute move $5.0M and p90 $394M.** AA recorded these restatements and never characterised them as cash flow problems.
+*Detection on AA's cash-flow events:* **95.3%** of the 992 show line-level movement and 70.0% move a subtotal. Only **47 events (4.7%)** show nothing — the candidate false-negative pool for the whole detection design, now small enough to read exhaustively.
 
-Only **47 events (0.5%)** are AA-flagged-but-undetected, which is the candidate false-negative pool and is now small enough to read by hand.
+*The under-characterisation claim, stated so it survives the obvious objection.* Among AA events that named some other failure, **2,650 moved a section subtotal** (2,636 of them cross-section or net-change), median absolute move $5.0M and p90 $394M. AA recorded these restatements and never characterised them as cash flow problems. The claim rests on the 30.2% vs 16.7% lift, not on the raw count: some of that movement is baseline churn, and the line-level version of this cell (7,003 events) should not be quoted because most of it is within-section churn AA could reasonably decline to call a cash-flow failure.
 
 **A real defect this surfaced in `001b`, not yet fixed.** `001b`'s rule that "a disclosed correction is never attributed to a standard" keys on **amendments only** — it runs before the AA link exists, so AA-disclosed periods were never protected. Measured exposure: the standards layer fully claimed 139 of 4,473 changed AA-matched fiscal years (**3.1%**). Small, but it is the Akorn failure mode arriving through the AA channel, and the fix is to feed AA matches back into `001b`'s override.
 

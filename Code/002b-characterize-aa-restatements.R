@@ -18,6 +18,35 @@
 #   this file is silent on the silent population by construction. It is the
 #   accuracy check on the disclosed channel, not a prevalence estimate.
 #
+# MOST AA RESTATEMENTS HAVE NOTHING TO DO WITH THE CASH FLOW STATEMENT
+#   This is the single easiest way to misread this script, so the reporting is
+#   built around it. AA's GAAP failures field is a pipe-delimited list of
+#   labels, and exactly one of them names this statement -- "Cash flow
+#   statement (SFAS 95) classification errors" -- carried here as `cfr`. It
+#   appears on 1,772 of 17,703 events, about 10%. The rest are debt and warrant
+#   issues (3,829), tax (2,402), revenue recognition (2,054), accruals, expense
+#   recording and so on.
+#
+#   So pooling every AA event and reporting what the SCF did is NOT a statement
+#   about cash flow restatements. It mostly measures background tagging churn,
+#   because line-level change is the norm in this panel: ~78% of ALL panel
+#   periods show some line-level change and ~17% show a section-level change,
+#   with no restatement involved. Against that baseline a pooled figure near
+#   50% says almost nothing.
+#
+#   Therefore:
+#     PRIMARY population  = events where AA itself named the cash flow
+#                           statement (`cfr == 1`). Only here are AA and this
+#                           pipeline talking about the same thing.
+#     CONTROL population  = events where AA named some other failure. Useful
+#                           for exactly two things: (a) a contrast that shows
+#                           the `cfr` flag has real content, and (b) the
+#                           under-characterisation claim -- AA logged the
+#                           restatement and never called it cash flow, yet a
+#                           section moved. That second claim only works when
+#                           the movement is compared against the panel
+#                           baseline, never asserted from its level alone.
+#
 # THE TWO HARD PARTS, BOTH FROM THE GRAIN MISMATCH
 #
 #   (1) ONE AA RECORD SPANS MANY OF OUR PERIODS.
@@ -356,8 +385,61 @@ cat("(if these two rates agree, mid-year window openings are not driving the",
 
 m <- events |> filter(matched_panel)
 
-cat("\n=== WHAT DID THE SCF DO, per AA event ===\n")
+cat("\n###############################################################\n")
+cat("# PRIMARY: events where AA ITSELF named the cash flow statement\n")
+cat("###############################################################\n")
+m_cf  <- m |> filter(cfr == 1)
+m_oth <- m |> filter(cfr == 0)
+cat("cash-flow-labelled matched events:", nrow(m_cf),
+    "| other-failure matched events:", nrow(m_oth), "\n")
+
+cat("\n=== WHAT DID THE SCF DO -- AA's cash flow events vs the rest ===\n")
+cmp <- bind_rows(
+  m_cf  |> count(scf_verdict) |> mutate(grp = "AA named cash flow"),
+  m_oth |> count(scf_verdict) |> mutate(grp = "AA named something else")) |>
+  group_by(grp) |> mutate(pct = round(100 * n / sum(n), 1)) |> ungroup() |>
+  select(scf_verdict, grp, pct) |>
+  pivot_wider(names_from = grp, values_from = pct, values_fill = 0)
+print(as.data.frame(cmp))
+cat("Read the CONTRAST. Cross-section reclassification is the discriminating\n",
+    "category: it is what a cash-flow classification error looks like, and it\n",
+    "should be far commoner on the left than the right.\n")
+
+cat("\n=== the same thing as counts, cash-flow events only ===\n")
+print(m_cf |> count(scf_verdict, sort = TRUE) |>
+  mutate(pct = round(100 * n / sum(n), 1)))
+
+cat("\n=== pooled over ALL matched events (kept only as a warning) ===\n")
 print(m |> count(scf_verdict, sort = TRUE) |> mutate(pct = round(100 * n / sum(n), 1)))
+cat("Do NOT quote this pooled table. 90% of AA events never named the cash\n",
+    "flow statement, and the panel baseline for line-level change is ~78%, so\n",
+    "most of what appears here is background churn rather than the event.\n")
+
+cat("\n=== every AA failure label vs what the SCF did (per fiscal year) ===\n")
+# Unnest the pipe-delimited failures field at the annual-basis grain so each
+# label can be scored against the same panel baseline. Labels overlap: an event
+# with 3 labels contributes to 3 rows, which is correct for "what does the SCF
+# do when AA mentions X".
+lab <- ab |>
+  filter(!is.na(acct_failures)) |>
+  mutate(f = str_split(acct_failures, fixed("|"))) |>
+  unnest(f) |>
+  mutate(f = str_trim(f)) |>
+  filter(f != "") |>
+  group_by(f) |>
+  summarise(fiscal_years = n(),
+            pct_section_changed = round(100 * mean(any_change), 1),
+            pct_cross_or_net = round(100 * mean(period_type %in%
+              c("Cross-section reclass", "Net cash flow change"), na.rm = TRUE), 1),
+            .groups = "drop") |>
+  filter(fiscal_years >= 100) |>
+  arrange(desc(pct_section_changed))
+print(as.data.frame(lab))
+cat("\nPanel baseline for comparison: ",
+    round(100 * mean(fs$any_change), 1), "% of all filing-periods show a",
+    " section-level change.\n", sep = "")
+cat("If the cash flow label does not sit at or near the top of this table, the\n",
+    "detection logic is not measuring what it claims to measure.\n")
 
 # THE BASE RATE. Without this, "we detect a change in 95% of AA's cash-flow
 # events" is close to meaningless, because line-level change is the norm in this
@@ -374,25 +456,37 @@ ab_rates <- ab |> summarise(
   pct_line_changed    = round(100 * mean(coalesce(period_type,
                                 period_type_adjusted) != "No change"), 1),
   pct_section_changed = round(100 * mean(any_change), 1))
+ab_oth_rates <- ab |> filter(cfr == 0) |> summarise(
+  basis = "fiscal years in an AA window, OTHER failure only", n = n(),
+  pct_line_changed    = round(100 * mean(coalesce(period_type,
+                                period_type_adjusted) != "No change"), 1),
+  pct_section_changed = round(100 * mean(any_change), 1))
 ab_cf_rates <- ab |> filter(cfr == 1) |> summarise(
   basis = "fiscal years in an AA CASH-FLOW-flagged window", n = n(),
   pct_line_changed    = round(100 * mean(coalesce(period_type,
                                 period_type_adjusted) != "No change"), 1),
   pct_section_changed = round(100 * mean(any_change), 1))
-print(bind_rows(panel_rates, ab_rates, ab_cf_rates) |> as.data.frame())
+print(bind_rows(panel_rates, ab_rates, ab_oth_rates, ab_cf_rates) |>
+        as.data.frame())
 cat("Read the LIFT over the panel baseline, not the level. Line-level change is\n",
     "the norm in this panel, so only the excess is evidence of anything.\n")
 
-cat("\n=== line-level vs section-level detection (why the distinction matters) ===\n")
-print(m |> summarise(
-  events                 = n(),
-  any_line_moved         = sum(scf_detected),
-  pct_line               = round(100 * mean(scf_detected), 1),
-  a_subtotal_moved       = sum(scf_section_moved),
-  pct_section            = round(100 * mean(scf_section_moved), 1),
-  lines_only_no_subtotal = sum(scf_detected & !scf_section_moved)))
-cat("The last column is the project's phenomenon: AA-recorded restatements where\n",
-    "SCF line items moved but every section subtotal was left intact.\n")
+cat("\n=== line-level vs section-level detection, split by AA's own label ===\n")
+# Split, not pooled. Pooled, `lines_only_no_subtotal` reads as 4,617 and looks
+# like the project's phenomenon, but it is dominated by the control group, whose
+# intra-section rate (51.8%) is close to ordinary panel churn. Only the
+# cash-flow-labelled row is a statement about cash flow restatements.
+print(bind_rows(
+  m_cf  |> mutate(grp = "AA named cash flow"),
+  m_oth |> mutate(grp = "AA named something else")) |>
+  group_by(grp) |> summarise(
+    events                 = n(),
+    pct_line_moved         = round(100 * mean(scf_detected), 1),
+    pct_subtotal_moved     = round(100 * mean(scf_section_moved), 1),
+    lines_only_no_subtotal = sum(scf_detected & !scf_section_moved),
+    pct_lines_only         = round(100 * mean(scf_detected &
+                                              !scf_section_moved), 1),
+    .groups = "drop") |> as.data.frame())
 
 cat("\n=== THE ACCURACY 2x2: AA's cash-flow flag vs what we detect ===\n")
 print(m |> count(aa_vs_us, sort = TRUE) |> mutate(pct = round(100 * n / sum(n), 1)))
