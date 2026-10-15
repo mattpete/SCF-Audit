@@ -494,7 +494,15 @@ The gradient by relative size is itself a sanity check, since larger revisions a
 
 ## WORKING RESULTS: the Big R disclosure decision (NOT YET VERIFIED)
 
-**Status: exploratory.** These came out of scratch analysis, not a pipeline script, and nothing here has been validated against filings. Treat every number as provisional. Scripts are not committed; they were run from a scratch directory and are reproducible from the description below in about twenty lines of `dplyr` plus `glm`.
+**Status: exploratory.** Nothing here has been validated against filings; treat every number as provisional. The scripts live in **`Code/exploratory/`**, which is NOT part of the pipeline chain and is run by hand:
+
+| script | what it does |
+|---|---|
+| `bigr-disclosure-decision.R` | the five regression panels below, with clustered SEs and t-statistics |
+| `validate-dni-against-aa.R` | reproduces AA's hand-coded income effect from our own comparison (the dNI test) |
+| `diagnose-truncation-and-rounding.R` | the window-length truncation gradient and the rounding-equivalence counts |
+
+All three read only existing parquet outputs and write nothing, so they are safe to re-run at any time.
 
 **The question.** A restatement can be escalated to a formal 8-K Item 4.02 non-reliance filing (a "Big R") or handled as a revision without one (a "little r"). That choice *is* the materiality determination, made by the preparer and auditor and filed with the SEC. So unlike the silent-revision statistic, which infers the judgement from an absence, this observes it directly. Does the cash flow statement get escalated like the income statement?
 
@@ -525,6 +533,32 @@ Magnitude is each statement's own error scaled by assets (`H - Assets ($)`, meas
 | **>2%** | **80.1%** | **23.8%** |
 
 The SCF sits below the I/S at every size. **A cash flow error above 2% of assets is escalated 20-24% of the time, less often than an income statement error BELOW 2% of assets (32.3%).**
+
+### The specifications, as run (no controls, SEs clustered by cik)
+
+`dNI` = |AA `Cumulative Change in Net Income`| / assets; `dCFO` = |our summed `cfo_change`| / assets. Assets are `H - Assets ($)`, measured during the restated period. Both winsorised at 1/99 and standardised, so logit coefficients are per standard deviation and comparable **within** a column.
+
+**Panel A, Big R on magnitude (logit, n = 6,865, 36.9% Big R, 4,339 clusters):**
+
+| | (1) | (2) | (3) | (4) mcap | (5) signed | (6) logs |
+|---|---|---|---|---|---|---|
+| dNI | 0.2826*** (6.20) | | 0.2806*** (6.16) | 0.4555*** (5.78) | | 1.0553*** (8.85) |
+| dCFO | | 0.0479** (2.03) | 0.0326 (1.33) | 0.0188 (0.67) | 0.0373 (1.53) | -0.0535 (-0.69) |
+| sNI | | | | | -0.2663*** (-7.51) | |
+| N | 6,865 | 6,865 | 6,865 | 6,319 | 6,865 | 912 |
+
+Wald `b(dNI) = b(dCFO)`: col (3) z = 4.77, col (6) z = 7.09, both p < 0.00001. Col (5) confirms income-DECREASING restatements escalate. Col (6) is log magnitudes on events where both are strictly positive, where the cash flow coefficient turns negative.
+
+**Panel C, high/low magnitude x statement (LINEAR PROBABILITY MODEL, n = 2,002 pure-group events).** Coefficients are probability points, so they are comparable ACROSS groups, which the logit versions are not:
+
+| | >0.1% | >0.5% | >1% | >2% |
+|---|---|---|---|---|
+| intercept (SCF, low) | 0.0487*** (4.69) | 0.0459*** (5.42) | 0.0501*** (6.10) | 0.0706*** (7.54) |
+| `is_grp` (level gap) | 0.2441*** (12.12) | 0.2567*** (14.27) | 0.2632*** (14.95) | 0.2521*** (14.05) |
+| `high` (within SCF) | 0.0830*** (4.47) | 0.1398*** (5.77) | 0.1793*** (5.92) | 0.1334*** (3.85) |
+| `is_grp:high` (DiD) | 0.1825*** (5.05) | 0.2203*** (5.31) | 0.2362*** (4.99) | 0.3411*** (6.66) |
+
+**`is_grp` is the result to lean on**: a 24 to 26 point level penalty on the cash flow statement, t between 12 and 15, and essentially invariant to where the magnitude threshold is set. The sole-failure version (n = 1,073) gives `is_grp` 0.2345*** (9.44) and `is_grp:high` 0.2308*** (3.78).
 
 ### Result 3: magnitude matters, but 2.5-3.5x less
 
