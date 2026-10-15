@@ -306,7 +306,7 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 `001c` writes `audit_sample_changed.csv` and `audit_sample_unchanged.csv` to `DATA_PATH` (120 cases each, seed 20260922, drawn only from testable clean-era periods). Each row carries both filings' accession numbers and **EDGAR index URLs**, the three section totals as filed and as latest presented, and a readable string of every changed tag with before/after amounts. Matt is working through these. In the *changed* sample the named tags should differ between the two linked filings; in the *unchanged* sample all three section totals should be identical in both. Disagreements are the most valuable output — they test the logic from outside.
 
 
-**Known stale items:** the header comment block at the top of `001a` still describes the earlier two-anchor design (two anchor filings, a single `negating` rule, a `scf_lines_raw.parquet` output) — the body is current. The 451 MB of parts still sit in Dropbox and will sync to coauthors despite being rebuildable in ~31 min.
+**Housekeeping:** the 451 MB of `scf_lines_parts/` sit in Dropbox and sync to every collaborator despite being rebuildable from the raw SEC files in ~33 min — worth pointing `lines_dir` at local disk now that two people are working from it.
 
 ## Validation checklist
 

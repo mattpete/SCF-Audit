@@ -21,18 +21,23 @@
 #   2. Section (operating/investing/financing) is assigned per filing from the
 #      presentation ordering relative to the section subtotal tags, so every line
 #      is attributed to a section.
-#   3. The `negating` presentation flag is applied so values match what a reader
-#      sees on the face of the filing (the legacy script used raw signs).
-#   4. The comparison is anchored on two SPECIFIC FILINGS -- the original filing
-#      and the LAST filing to re-present the period -- rather than capping
-#      comparatives at 2 and coalescing. Per project convention, the most recent
-#      comparative is the final attestation of how the period should be presented.
+#   3. Signs are resolved PER LINE rather than by blanket application of the
+#      `negating` display flag, because filers churn the stored sign and the flag
+#      in opposite directions (see the SIGN CONVENTION note in Section 7).
+#   4. The comparison is anchored on three SPECIFIC FILINGS -- the original, the
+#      LAST regular filing to re-present the period as a comparative (the SILENT
+#      channel), and the last 10-K/A or 10-Q/A restating it (the DISCLOSED
+#      channel) -- rather than capping comparatives at 2 and coalescing. Per
+#      project convention the most recent re-presentation is the final
+#      attestation of how the period should be presented.
 #   5. Missing tags on either side are carried as explicit 0s with presence flags,
 #      so disaggregation (one line splitting into several) is visible directly
 #      rather than inferred heuristically.
 #
 # SIGN CONVENTION
-#   `value` throughout is the DISPLAYED value (negating applied).
+#   `value_raw` is the value as stored in XBRL; `value` applies the filing's own
+#   `negating` display flag. Neither alone is comparable across filings -- see the
+#   per-line rule in Section 7.
 #   `difference` = as-filed value - subsequent value, matching Examples.xlsx.
 #
 # OUTPUT
@@ -40,6 +45,9 @@
 #                                       (read with arrow::open_dataset)
 #   {data_path}scf_line_changes.parquet one row per company-period x tag
 #   {data_path}scf_section_changes.parquet one row per company-period x section
+#   {data_path}scf_period_summary.parquet one row per company-period
+#
+# DOWNSTREAM  001b (standards) -> 001c (filing panel) -> 002a (Audit Analytics)
 # =============================================================================
 
 
