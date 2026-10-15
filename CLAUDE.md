@@ -70,6 +70,8 @@ Note this claim is **robust to the tag-versus-line-item caveat below**, because 
 
 ### Measurement caveat: tags proxy for line items (OPEN — deliberately not settled)
 
+*See also Limitations of the approach, item 4, for the sharper version of this: a tag can change while the printed statement reads word-for-word identically.*
+
 `001a` observes changes in XBRL **tags**, which only proxy for changes in **line items**. A filer can retag the same line with a different element and nothing economic changes — `IncreaseDecreaseInDeferredRevenue` → `IncreaseDecreaseInContractWithCustomerLiability` under ASC 606, or `RepaymentsOfLongTermCapitalLeaseObligations` → `FinanceLeasePrincipalPayments` under ASC 842. The slippage runs one way: **tag-level counts overstate line-item changes.**
 
 Scope it correctly rather than caveating everything. It affects descriptive *tag-level* counts ("N line items were revised"); it does **not** affect the section-level CFO/CFI/CFF measures that carry the actual tests, because a rename inside a section nets to zero and leaves the subtotal untouched — which the reconciliation check verifies directly. Section-level outcomes are therefore primary; tag-level detail is diagnostic (identifying *why* a section moved, so ASU-driven causes can be excluded).
@@ -345,6 +347,47 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 
 
 **Housekeeping:** the 451 MB of `scf_lines_parts/` sit in Dropbox and sync to every collaborator despite being rebuildable from the raw SEC files in ~33 min — worth pointing `lines_dir` at local disk now that two people are working from it.
+
+## Limitations of the approach
+
+Distinct from the Validation checklist below. That list is *things to go and check*; these are properties of the design that **remain true even after every check passes**. They belong in the paper, not in a backlog.
+
+### 1. "Silent" means not-amended-and-not-in-Audit-Analytics, not "never disclosed"
+
+The measure is operational: no 10-K/A or 10-Q/A changed the statement, and no AA restatement or adjustment window covers the period. A filer can revise a prior period and disclose it in **text** — a "Revision of Previously Issued Financial Statements" note, a basis-of-presentation paragraph, an immateriality assertion — without amending anything, and AA may never log it. AA is a vendor database with its own coverage criteria, not a census of disclosure.
+
+So the headline is a **lower bound on disclosure** and an upper bound on silence. It supports "this revision never entered the channels researchers actually sample from", which is still a real and useful claim. It does **not** support "nobody was told." Reading footnote text for a sample of silent cases is the only way to bound the gap, and nothing in the pipeline attempts it.
+
+### 2. Only periods that get re-presented are observable
+
+Detection requires a *later* filing showing the period as a comparative. A revision in a period never re-presented — the filer delisted, was acquired, stopped filing, or the period sits at the panel's right edge — is structurally invisible. Related: the panel holds ~19 periods per filer where four filings a year over 13 years would suggest ~52, and that gap has been assumed to be non-re-presented periods rather than measured.
+
+### 3. Retrospective reclassifications required by ONGOING GAAP are not in the standards layer
+
+**The most consequential gap, and a research gap rather than a documentation one.** `001b`'s `STANDARDS` table covers five *new pronouncements* (ASU 2016-09, 2016-18, ASC 606, 842, ASU 2016-01). It does not cover reclassifications that settled GAAP requires on an ongoing basis:
+
+- **Discontinued operations (ASC 205-20)** — a segment disposal forces retrospective recast of prior-period cash flows. Legitimate, routine, driven by no new pronouncement, and it lands squarely in the "unexplained" residual.
+- **Segment redefinition** and **fiscal-year changes**, which recast comparatives for the same reason.
+
+Note discontinued operations was tested and ruled out as a cause of *reconciliation failures* (1.77%, below baseline) — that is a different question from whether it drives *revisions*, which has never been tested. The wave detector would not have caught these either: they are firm-specific events scattered across time, not synchronised adoption waves, so they produce no spike.
+
+### 4. We observe tag changes, not line-item changes
+
+A filer can retag a line with a different XBRL element while the printed statement reads **word-for-word identically**. The pipeline sees a tag disappear and another appear, and classifies it as Added / Dropped — or infers disaggregation — when a reader comparing the two filings side by side would see no change at all. The converse also happens: the wording changes while the element does not.
+
+This is the sharper form of the tags-proxy-for-line-items caveat above. It matters most for descriptive statements like "N line items were revised" and for anything labelled disaggregation. It is **checkable but unchecked**: `plabel` (the filer's own line label) is carried through the extract, so label similarity would separate a silent retagging from a genuine presentation change without re-extracting anything. Until that is done, tag-level counts should be read as an upper bound on line-item change.
+
+### 5. "Unexplained" is not "error"
+
+The residual after removing standard-driven amounts is a *candidate* revision. A filer may be entitled to change presentation, may be improving it, or may be correcting a genuine mistake — the pipeline cannot distinguish these. The code says "candidate revision"; prose should resist sliding to "misstatement."
+
+### 6. Materiality is absolute, not scaled
+
+`MATERIALITY_FLOOR` is $1,000 everywhere, chosen because filings round to thousands. It is not scaled to firm size, assets or cash flow, so the same threshold treats a microcap and Walmart identically. Descriptive counts are sensitive to this and no relative-magnitude screen exists anywhere in the pipeline.
+
+### 7. Revision *events* are undercounted
+
+The comparison is anchored on the original filing and the **last** re-presentation. A period revised three times across successive filings reads as one revision, and intermediate values are never observed. The design choice is deliberate (the last presentation is the final attestation) but it means the panel measures *whether* a period was ultimately revised, not *how often* it was revised.
 
 ## Validation checklist
 
