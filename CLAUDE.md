@@ -106,13 +106,14 @@ Scripts are numbered by research goal: `001x` builds the SCF revision dataset fr
 | `001b-flag-standard-driven-changes.R` | attributes changes to the standards that required them and subtracts them, leaving an unexplained residual per section | ~2 min |
 | `001c-build-filing-audit-summary.R` | collapses to one row per filing-period and writes the hand-audit samples | ~1 min |
 | `002a-link-audit-analytics.R` | left-joins Audit Analytics onto the filing panel; identifies silent revisions | ~1 min |
+| `002b-characterize-aa-restatements.R` | runs the link the other way: per AA event, what the SCF did and whether AA characterised it correctly | ~1 min |
 
 Only `001a` touches the raw 6.2 GB of SEC files; everything after it reads parquet, so `001b`/`001c` can be re-run freely after any logic change.
 
-All four live scripts are wired together: `002a` reads `001c`'s filing panel (`scf_filing_summary_full.parquet`) plus the two Audit Analytics exports. An earlier version of `002a` consumed `xbrl_all_tsv.parquet` from the now-superseded `legacy/extract-all-tags-from-XBRL-tsv.R` and ran AA-anchored; that version is in git history only.
+All five live scripts are wired together: `002a` reads `001c`'s filing panel (`scf_filing_summary_full.parquet`) plus the two Audit Analytics exports, and `002b` reads that same panel plus `aa_cleaned.parquet` (which `002a` writes), so `002a` must run first. An earlier version of `002a` consumed `xbrl_all_tsv.parquet` from the now-superseded `legacy/extract-all-tags-from-XBRL-tsv.R` and ran AA-anchored; that version is in git history only.
 
 **`Code/legacy/`** (not run; numeric prefixes dropped because the old numbering no longer applies):
-- `extract-all-tags-from-XBRL-tsv.R` (was `001c`) — the predecessor extractor; still generates the `xbrl_all_tsv.parquet` that `002a` currently consumes.
+- `extract-all-tags-from-XBRL-tsv.R` (was `001c`) — the predecessor extractor; generated `xbrl_all_tsv.parquet`, which the superseded AA-anchored `002a` consumed; nothing in the live chain reads it any more.
 - `process-GAAP-taxonomy.R` (was `001d`) — selected SCF tags by filtering `GAAP_Taxonomy.xlsx` presentation roles, covering the standard, deposit-based, insurance-based, securities-based, REIT and direct-method SCF variants. Superseded by `001a`, which reads the SEC `pre` file instead; kept as a fallback.
 
 Removed in the reorganisation and recoverable from git history: the JSON/`companyfacts.zip` lineage (`001-extract-CF-tags-from-XBRL-json.R`), a stale copy of the TSV extractor, and `002 Create FS from XBRL data.R` (early exploration of the raw file structure).
@@ -257,6 +258,75 @@ AA catches cross-section reclassifications marginally more often than net-cash-f
 
 **Outputs:** `scf_filing_with_aa{suffix}.parquet` (the filing panel plus `aa_match`, `aa_flagged_cash_flow`, `aa_n_events`, `aa_first_disclosed`, `aa_days_after_filing`, `aa_keys`, `disclosure_status`, `silent_revision`, `aa_missed_cash_flow_nature`, `in_clean_sample`) and `aa_cleaned.parquet` (17,703 deduplicated AA events: 14,037 restatements, 3,666 adjustments, 1,772 cash-flow flagged, 5,062 formal 8-K Item 4.02).
 
+### AA restatement characterisation (`002b-characterize-aa-restatements.R`)
+
+`002a` and `002b` are deliberately opposite and neither replaces the other:
+
+| | unit | question |
+|---|---|---|
+| `002a` | our filing-period | of **our** revisions, how many did AA never record? (**silence**) |
+| `002b` | the AA event | of **AA's** restatements, what did the SCF do, and did AA characterise it correctly? (**accuracy**) |
+
+`002b` is silent on the silent population by construction — AA only exists where a filer disclosed. It is the accuracy check on the disclosed channel, not a prevalence estimate.
+
+**The two hard parts are both grain mismatches, and the fixes are not interchangeable.**
+
+1. **One AA record spans many of our periods.** AA windows are firm-level date ranges: median 364 days, one quarter at the 25th percentile, over five years at the 99th. They are *fiscal-period aligned* (begins cluster in months 1/4/7/10, ends in 3/6/9/12), so a window maps onto a set of reporting periods rather than cutting across them. Each event is expanded to the periods it covers, characterised, and rolled back up.
+
+2. **Our figures are YTD, so they nest and must never be summed.** Within one fiscal year the panel holds Q1 (3 months), Q2 (6), Q3 (9) and FY (12) — roughly 67k periods at each length. Q3 *contains* Q1. Summing the four counts the same dollars up to four times. Fix: within each (cik, fiscal year) keep the **single longest period the window covers** — the "annual basis" — which is one non-overlapping observation per fiscal year, and only then sum across years. If a window ends in June the 12-month period is not covered and the 6-month Q2 YTD is correctly chosen instead. So `n_fy_covered` counts **fiscal years, not filings**: a 3-year event has 3 rows, not 12.
+
+   YTD figures are deliberately **not** differenced into discrete quarters. It is arithmetically possible (Q3 − Q2) but every differenced quarter inherits the error of two filings, and a window aligned to quarter ends gains nothing from it.
+
+**A "strict containment" rule was built, measured and rejected — do not reinstate it.** Also requiring `period_start >= misstate_begin` looks like it removes contaminated figures but does not: a YTD period *always* starts at the fiscal year start, so the condition only asks whether the AA window happens to open on a fiscal year boundary. For a window opening in April, every YTD period of that year starts in January, so the whole year is discarded although the window covers Q2–Q4. Measured cost: 12,971 annual rows fall to 4,802 (−63%), and 4,112 of 17,703 windows open mid-year. It selects on window alignment, not data quality. The genuine limitation — with YTD data you cannot isolate Apr–Jun without differencing — is carried as a flag (`fy_fully_in_window`, `n_fy_fully_covered`) and a sensitivity cut instead. That cut shows fully covered years change *more* often, not less (39.8% vs 34.5%), so mid-year openings are not driving the result.
+
+**Three further decisions the data forced:**
+
+- **The event verdict is a severity rank, not a sum.** Signed changes summed across years let offsetting years cancel: CFO +500k in FY2014 and −500k in FY2015 sums to zero and would read as "no change" although both years moved. The verdict is the most severe per-year verdict (net change > cross-section > intra-section > none); dollar sums are carried separately as magnitudes only, alongside `abs_section_change`, which survives cancellation.
+- **The verdict uses the RAW taxonomy, not the standards-adjusted one.** An AA record *is* a disclosed correction, and `001b`'s own rule is that a disclosed correction beats standard attribution — subtracting a standard here would erase the very event AA recorded. `scf_verdict_adjusted` is kept beside it so the effect is visible; the two agree on ~95% of events.
+- **Detection is LINE-level, derived from the verdict.** `001c`'s `any_change` is TRUE only when a section *subtotal* moved, so building detection on it is blind to within-section reclassification — exactly the phenomenon the paper is about. `scf_detected` is therefore `scf_verdict != "No change"`, and `scf_section_moved` is kept separately. The difference is not cosmetic: detection on AA's cash-flow-flagged events reads **70% section-level but 95.3% line-level**.
+
+**Headline results (9,183 of 17,703 AA events match the panel; 65.6% of those whose window ends inside the panel era, reconciling with `002a`'s 65.1%):**
+
+*What the SCF actually did, per AA event:*
+
+| verdict | n | share |
+|---|---|---|
+| Intra-section reclass | 4,492 | 48.9% |
+| Net cash flow change | 2,215 | 24.1% |
+| Cross-section reclass | 1,241 | 13.5% |
+| No change | 1,235 | 13.4% |
+
+So **about half of all AA-recorded restatements that touch the panel moved SCF line items while leaving every section subtotal intact** — 4,617 events show line movement with no subtotal movement at all. That is the project's phenomenon appearing inside the *disclosed* population.
+
+*The base rate, which is what makes the rest interpretable.* Line-level change is the norm in this panel, so only the lift over baseline is evidence of anything:
+
+| basis | n | line changed | **section changed** |
+|---|---|---|---|
+| all panel filing-periods | 267,282 | 77.9% | **16.7%** |
+| fiscal years inside an AA window | 12,971 | 86.1% | **34.5%** |
+| fiscal years in an AA *cash-flow-flagged* window | 1,588 | 94.1% | **65.6%** |
+
+**This is the strongest validation evidence in the project, and it needs no hand-auditing.** AA's `cfr` flag is coded by human analysts reading disclosures; our section-change flag is derived from XBRL arithmetic. They are fully independent, and the section-level rate rises monotonically 16.7% → 34.5% → **65.6%**, a 3.9× lift. It also settles a design question empirically: the line-level measure is nearly saturated at baseline (77.9%) and barely discriminates, while the section-level measure separates cleanly — independent support for the existing decision to treat **section-level outcomes as primary and tag-level as diagnostic**.
+
+*The accuracy 2x2 (AA's cash-flow flag vs line-level detection):*
+
+| | n | share |
+|---|---|---|
+| AA silent on CF, we see a change | 7,003 | 76.3% |
+| AA silent on CF, we see nothing | 1,188 | 12.9% |
+| AA flagged CF, we see a change | 945 | 10.3% |
+| AA flagged CF, we see nothing | 47 | 0.5% |
+
+Read the top row carefully. At line level it is 7,003 events, but most are within-section reclassifications AA could reasonably decline to call a cash-flow-statement failure. **The version of the claim that survives that objection requires a subtotal to have moved: 2,650 events, of which 2,636 are cross-section or net-change, median absolute move $5.0M and p90 $394M.** AA recorded these restatements and never characterised them as cash flow problems.
+
+Only **47 events (0.5%)** are AA-flagged-but-undetected, which is the candidate false-negative pool and is now small enough to read by hand.
+
+**A real defect this surfaced in `001b`, not yet fixed.** `001b`'s rule that "a disclosed correction is never attributed to a standard" keys on **amendments only** — it runs before the AA link exists, so AA-disclosed periods were never protected. Measured exposure: the standards layer fully claimed 139 of 4,473 changed AA-matched fiscal years (**3.1%**). Small, but it is the Akorn failure mode arriving through the AA channel, and the fix is to feed AA matches back into `001b`'s override.
+
+**Other findings:** formal 8-K Item 4.02 restatements — the most serious tier — are *more* likely to show no SCF change (20.2% vs 13.4% overall), consistent with the worst restatements being income/balance-sheet issues. AA's reported cumulative change in net income correlates only modestly with the size of our section move (Spearman 0.357), as expected when SCF classification errors need not touch net income. Event-level detection rises with window length (83.9% → 97.1%), which is mechanical — longer windows cover more fiscal years — so `pct_fy_changed` (27.2% → 42.0%) is the comparable figure.
+
+**Outputs:** `aa_events_scf_characterised.parquet` (one row per AA event, all 17,703 retained including unmatched, with `matched_panel`, `no_match_reason`, `scf_verdict`, `scf_verdict_adjusted`, `scf_detected`, `scf_section_moved`, per-section change sums, `abs_section_change`, `aa_vs_us`) and `aa_event_periods.parquet` (the event x fiscal-year annual basis). Two targeted hand-validation samples are written to `aa_validate_cf_flagged_no_change.csv` (n = 47, our candidate false negatives) and `aa_validate_section_moved_not_flagged.csv` (n = 60, AA's candidate under-characterisations) — drawn from the disagreeing cells, because the agreeing cells settle nothing.
+
 ### Running `001a` (config at the top of the script)
 
 The script has two phases with **separate scopes**, which is the single most important thing to understand before running it:
@@ -339,7 +409,10 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 1. **Confirm silent revisions are real revisions** — see Validation checklist item 1. Nothing else matters until this holds.
 2. **Sample construction**, now decidable because the numbers exist: drop financials (SIC 6000-6999) and probably utilities; decide what to do with the 20.8% non-testable and 6.6% ambiguous sections; truncate the panel to the clean era (roughly FY2013–2021, excluding early-XBRL phase-in and the censored right edge).
 3. **Download the per-period `cal` files** and replace the heuristic income-block collapse with the filer's own calculation linkbase (see the CORRECTION bullet under Phase 1 design). Highest-value engineering improvement available.
-4. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%) — a footnote rather than more engineering.
+4. **Feed AA matches into `001b`'s disclosed-correction override.** `001b` already refuses to attribute a period to a standard when an *amendment* disclosed a correction (the guard that rescued Akorn FY2014), but it runs before the AA link exists, so a period disclosed only through Audit Analytics gets no such protection. `002b` measures the exposure: the standards layer fully claimed **139 of 4,473 changed AA-matched fiscal years (3.1%)**. Small, but it is the Akorn failure mode arriving by a second route, and a real defect rather than a judgement call. The fix needs a dependency inversion, since `001b` would have to read `aa_cleaned.parquet` which `002a` currently writes: either move the AA cleaning into its own earlier script, or let `001b` take the AA event table as an optional input.
+5. **Read the 47 AA-flagged-but-undetected events** (`aa_validate_cf_flagged_no_change.csv`) — the candidate false-negative pool for the whole detection design, now small enough to read exhaustively rather than sample.
+6. **Decompose the 3,178 unmatched AA events whose CIK and era are both present** — 36% of all unmatched events, and the only part of the coverage gap that could be a join defect rather than genuine non-coverage.
+7. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%) — a footnote rather than more engineering.
 
 ### Hand-audit in progress
 
@@ -416,8 +489,8 @@ What has actually been verified, and what the results still rest on that nobody 
 
 ### Audit Analytics link
 
-8. **The 65.1% reverse-coverage rate.** The claim that the 35% gap is "AA covering filers and periods the panel does not" was **never verified** — it could equally be a join defect. Straightforward to decompose.
-9. **AA's `cfr` flag** is trusted as "AA identified this as a cash flow issue" and never spot-checked against what the pipeline detects.
+8. **The 65.1% reverse-coverage rate — now partly decomposed by `002b`.** Of 8,520 unmatched AA events: 3,422 windows end before the panel starts, 1,728 CIKs are absent from the XBRL panel, 192 windows begin after the panel ends, and **3,178 have the CIK and era present but no period inside the window** (36% of the unmatched). That last group is the one that could still be a join defect rather than genuine coverage, and it has not been read by hand.
+9. **AA's `cfr` flag — now spot-checked in aggregate by `002b`, not yet by hand.** It behaves as intended: fiscal years inside a `cfr` window show section-level change at 65.6% against a 16.7% panel baseline, a 3.9x lift from a fully independent coding. The remaining work is the 47 AA-flagged-but-undetected events (`aa_validate_cf_flagged_no_change.csv`) and the 60 sampled under-characterisations (`aa_validate_section_moved_not_flagged.csv`).
 10. **The row-G objection.** 69% of silent-revision firms appear in AA for *other* periods. That is the strongest available criticism and needs to become an explicit argument — AA had the firm on its radar and still did not capture this revision — rather than a footnote. Both 30.5% and 80.0% are true statements about the same data depending on the merge rule.
 11. **AA dedup on `(cik, file_date)`** keeps restatement over adjustment and most-material; could be discarding relevant records.
 
