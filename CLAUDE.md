@@ -421,6 +421,61 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 
 **Housekeeping:** the 451 MB of `scf_lines_parts/` sit in Dropbox and sync to every collaborator despite being rebuildable from the raw SEC files in ~33 min — worth pointing `lines_dir` at local disk now that two people are working from it.
 
+## Measurement validation against Audit Analytics (the dNI test)
+
+The idea, which is the best validation this project has: net income runs through **exactly the same machinery** as CFO, and AA hand-codes the income effect of every restatement independently. So reproducing AA's figure validates the machinery, and CFO inherits the credibility. Net income needed no new extraction, being the indirect-method SCF's top line (`NetIncomeLoss` 65.6% of periods, `ProfitLoss` 33.2%, the `[Income starting point]` collapse only 1.2%).
+
+**Result: the logic is correct, and the one failure mode is structural truncation rather than a bug.**
+
+| AA window length | events | median \|ours\| / \|AA\| | within 25% |
+|---|---|---|---|
+| <= 2 quarters | 339 | **1.000** | 70.5% |
+| ~1 year | 463 | **1.000** | 61.6% |
+| 1-2 years | 337 | **1.000** | 36.2% |
+| 2-3 years | 275 | **1.000** | 27.6% |
+| 3+ years | 347 | 0.702 | 15.0% |
+
+The median is exact out to three years, which is precisely the comparative reach of a 10-K (current plus two prior), and then degrades. The share where we *understate* AA rises monotonically with fiscal years covered: 21.9% (1 yr) to 54.3% (5 yr). **A long restatement window's earliest years never appear in any later comparative, so they are structurally unobservable.** This is limitation 2 below, now quantified, and it applies to `cfo_change` identically: magnitudes for multi-year AA events are understated, so any test using them is conservative.
+
+### Rounding-precision changes pass the materiality floor
+
+Found while checking the above: AAR Corp re-presents `ProfitLoss` 69,826,000 as 69,800,000, a $26,000 "change" that is pure rounding rather than a revision. Testing whether the later value equals the original rounded to a coarser unit:
+
+| population | value-change rows | pure rounding |
+|---|---|---|
+| section subtotals (CFO/CFI/CFF) | 71,904 | **8,270 (11.5%)** |
+| all SCF line rows | 455,590 | **87,788 (19.3%)** |
+| net income line | 17,588 | 2,921 (16.6%) |
+
+**`MATERIALITY_FLOOR` does not catch these**: the median pure-rounding change on a section subtotal is **$4,580**, comfortably above the $1,000 absolute floor, while its median *relative* size is 0.013%. This is limitation 6 (absolute, not scaled) made concrete, and it is the first hard evidence on validation item 1, since a measurable minority of detected changes are artifacts rather than revisions.
+
+### The headline is robust to a relative screen, and a better version exists
+
+Applying a relative-materiality screen to the clean-sample unexplained revisions (13,409 at 80.0% silent):
+
+| screen: max section move > | revisions kept | % of baseline | **% silent** |
+|---|---|---|---|
+| none | 13,409 | 100% | **80.0%** |
+| 0.1% of the section | 12,099 | 90.2% | 79.1% |
+| 1% | 9,740 | 72.6% | 77.1% |
+| 5% | 6,870 | 51.2% | **75.3%** |
+
+Dropping **half** the revision population moves the headline only 80.0% to 75.3%, so rounding inflates the revision *count* but barely touches the silent *share*.
+
+The gradient by relative size is itself a sanity check, since larger revisions are more likely disclosed as they should be, and it yields a cleaner claim than the pooled 80%:
+
+| max section move | n | % silent | % in AA | median $ |
+|---|---|---|---|---|
+| <0.01% | 357 | 84.6% | 14.3% | 3,000 |
+| 0.01-0.1% | 953 | 89.6% | 9.8% | 40,000 |
+| 0.1-1% | 2,359 | 87.2% | 12.3% | 300,000 |
+| 1-10% | 4,092 | 80.5% | 18.7% | 1,310,000 |
+| **>10%** | **5,648** | **74.7%** | 24.3% | **6,100,000** |
+
+**Even revisions exceeding 10% of the section subtotal are silent three times in four**, at a median of $6.1M. That version of the claim is immune to the rounding objection entirely and should be reported alongside the pooled figure.
+
+**Recommended change, not yet made:** add a relative screen beside `MATERIALITY_FLOOR` (either `|difference| / |section as filed|` or a rounding-equivalence test) and report headline figures both ways. Not done because it would move already-reported numbers in `001b`/`001c`/`002a`.
+
 ## Limitations of the approach
 
 Distinct from the Validation checklist below. That list is *things to go and check*; these are properties of the design that **remain true even after every check passes**. They belong in the paper, not in a backlog.
@@ -433,7 +488,7 @@ So the headline is a **lower bound on disclosure** and an upper bound on silence
 
 ### 2. Only periods that get re-presented are observable
 
-Detection requires a *later* filing showing the period as a comparative. A revision in a period never re-presented — the filer delisted, was acquired, stopped filing, or the period sits at the panel's right edge — is structurally invisible. Related: the panel holds ~19 periods per filer where four filings a year over 13 years would suggest ~52, and that gap has been assumed to be non-re-presented periods rather than measured.
+Detection requires a *later* filing showing the period as a comparative. **Now measured** (see the dNI test section above): the median of our change matches AA's hand-coded figure exactly for windows up to three years and falls to 0.70 beyond, with the share understated rising from 21.9% to 54.3% as the window lengthens, because a 10-K re-presents only the current year plus two prior, so longer restatement windows are truncated by construction. A revision in a period never re-presented — the filer delisted, was acquired, stopped filing, or the period sits at the panel's right edge — is structurally invisible. Related: the panel holds ~19 periods per filer where four filings a year over 13 years would suggest ~52, and that gap has been assumed to be non-re-presented periods rather than measured.
 
 ### 3. Retrospective reclassifications required by ONGOING GAAP are not in the standards layer
 
@@ -456,7 +511,7 @@ The residual after removing standard-driven amounts is a *candidate* revision. A
 
 ### 6. Materiality is absolute, not scaled
 
-`MATERIALITY_FLOOR` is $1,000 everywhere, chosen because filings round to thousands. It is not scaled to firm size, assets or cash flow, so the same threshold treats a microcap and Walmart identically. Descriptive counts are sensitive to this and no relative-magnitude screen exists anywhere in the pipeline.
+`MATERIALITY_FLOOR` is $1,000 everywhere, chosen because filings round to thousands. It is not scaled to firm size, assets or cash flow, so the same threshold treats a microcap and Walmart identically. **Now measured:** 11.5% of section-subtotal value changes and 19.3% of all line-level value changes are pure rounding-precision changes, and the floor does not remove them because their median size is $4,580 against a $1,000 floor. The headline survives a relative screen (80.0% to 75.3% even after dropping half the population) but the revision *count* is inflated. See the dNI test section above for the tables and the recommended fix.
 
 ### 7. Revision *events* are undercounted
 
@@ -473,6 +528,7 @@ What has actually been verified, and what the results still rest on that nobody 
 - Reconciliation: 600,144 of 603,168 testable sections (99.5%) tie.
 - `001b` arithmetic: four in-script sanity checks pass — no residual exceeds the original move, no sign flips, no flat section made to move, decomposition exact on all 700,913 reconciling sections.
 - Merge rule: the silent share is 73–93% across seven alternative join definitions, with the chosen rule near the conservative end.
+- **Convergent validity against Audit Analytics' hand-coded income effect.** Net income is measured by the *same* machinery as CFO (same original-vs-comparative anchoring, same per-line sign resolution, same YTD annual basis, same window aggregation) and is already in the extract, because it is the top line of an indirect-method SCF, present for 98.2% of company-periods, so nothing had to be re-extracted. Comparing our summed change in net income against AA's independently hand-coded `Cumulative Change in Net Income` (n = 1,761 events with both non-zero): the sign convention is confirmed (`ours = -AA`, 80.6% agreement) and **the median ratio |ours| / |AA| is exactly 1.000 for every window up to three years**. Population-scale evidence that the comparison logic is right, and dCFO inherits it, which is stronger than hand-auditing a few dozen cases because the benchmark is independent and continuous.
 
 ### Critical — could change the headline
 
