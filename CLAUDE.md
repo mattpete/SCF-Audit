@@ -12,14 +12,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **You cannot run anything until two data paths exist.** The repo holds code only; all data lives outside it and none of it is committed.
 
-1. Create `.Renviron` at the repo root (gitignored, machine-specific):
+1. Create `.Renviron` at the repo root (gitignored, machine-specific). **One required line:**
    ```
-   DATA_PATH = "C:/.../Cash Flow Audit Idea/Data/"
-   XBRL_DATA_PATH = "D:/XBRL/XBRL Extracted Data/"
+   DATA_PATH = "C:/Users/<you>/OneDrive - The University of Alabama/SCF Audit/Data/"
    ```
-   Trailing slashes matter — the scripts paste paths together directly.
+   The trailing slash matters — the scripts paste paths together directly.
 
-2. `XBRL_DATA_PATH` needs the SEC **Financial Statement Data Sets**, 86 periods from 2009 Q1 to 2023 M12 (quarterly through 2020 Q3, monthly after). The live scripts read only `{period}_num.parquet`, `{period}_pre.parquet` and `{period}_sub.parquet` — about 6.2 GB. The `.tsv` originals and the `tag` files are also there but unused by the live chain.
+   Everything lives under that one folder, including the raw SEC files in a subfolder:
+   ```
+   {DATA_PATH}
+       restatement-data-*.xlsx, adjustment-data-*.xlsx    licensed inputs
+       scf_*.parquet, audit_sample_*.csv                  pipeline outputs
+       scf_lines_parts/                                   extract checkpoint (85 files)
+       comp_*.parquet, crsp_*.parquet                     for the eventual sample
+       XBRL/XBRL Extracted Data/                          259 SEC parquet files
+   ```
+   The scripts reference the subfolder inline, e.g.
+   `glue("{data_path}XBRL/XBRL Extracted Data/{yr}_{pd}_num.parquet")`, so there is no
+   second path variable to set.
+
+   Two optional vars exist only for staging data, not for running the pipeline:
+   `DROPBOX_PATH` and `XBRL_DATA_PATH` are the *old* locations, read by
+   `Code/tools/sync-to-onedrive.R`. Andrew does not need either.
+
+2. `{DATA_PATH}XBRL/XBRL Extracted Data/` holds the SEC **Financial Statement Data Sets** — 86 periods from 2009 Q1 to 2023 M12 (quarterly through 2020 Q3, monthly after), as `{period}_num.parquet`, `{period}_pre.parquet` and `{period}_sub.parquet`, 9.2 GB. The 80 GB of `.tsv` originals and the `*_tag.parquet` files are **not** staged: the pipeline reads only these three parquet patterns. `cal.parquet` also sits there — one orphan quarter of the per-filing calculation linkbase, kept for the nesting fix described under Phase 1 design.
 
 3. `DATA_PATH` needs two **licensed Audit Analytics** exports, which must come from Matt (not redistributable): `restatement-data-031425.xlsx` and `adjustment-data-021626.xlsx`. It is also where every pipeline output is written.
 
@@ -68,7 +84,7 @@ Scope it correctly rather than caveating everything. It affects descriptive *tag
 - Open `SCF-Audit.Rproj` in RStudio and run scripts by sourcing them or executing line-by-line — there is no CLI build/lint/test entrypoint.
 - Required env vars, set in a local (gitignored) `.Renviron` at the repo root:
   - `DATA_PATH` — processed data folder (parquet outputs, taxonomy/restatement inputs)
-  - `XBRL_DATA_PATH` — raw SEC XBRL Financial Statement Data Sets folder (quarterly/monthly `_num.tsv` / `_sub.tsv`)
+  - `DROPBOX_PATH`, `XBRL_DATA_PATH` — optional, and only used by `Code/tools/sync-to-onedrive.R` to find the pre-OneDrive copies. Not needed to run the pipeline.
   - These are machine-specific (differ between personal/work computers) and never committed.
 - `Code/000-utilities-functions.R` is sourced by downstream scripts via `source("code/000-utilities-functions.R")` — run scripts from the repo root so this relative path resolves.
 - No automated tests exist. Scripts self-validate with ad hoc `filter()`/`View()` checks against known CIKs, left in place at the bottom of each script under headers like `# Validation` or `# SCRATCH`. These are exploratory, not meant to run unattended as part of the pipeline.
@@ -98,6 +114,28 @@ All four live scripts are wired together: `002a` reads `001c`'s filing panel (`s
 - `process-GAAP-taxonomy.R` (was `001d`) — selected SCF tags by filtering `GAAP_Taxonomy.xlsx` presentation roles, covering the standard, deposit-based, insurance-based, securities-based, REIT and direct-method SCF variants. Superseded by `001a`, which reads the SEC `pre` file instead; kept as a fallback.
 
 Removed in the reorganisation and recoverable from git history: the JSON/`companyfacts.zip` lineage (`001-extract-CF-tags-from-XBRL-json.R`), a stale copy of the TSV extractor, and `002 Create FS from XBRL data.R` (early exploration of the raw file structure).
+
+### Staging data onto OneDrive (`Code/tools/sync-to-onedrive.R`)
+
+OneDrive is the single source of truth for data shared between collaborators. This tool copies the files the pipeline actually reads out of their two original homes (`DROPBOX_PATH` for processed data and licensed inputs, `XBRL_DATA_PATH` for the raw SEC files) into one `DATA_PATH` folder, preserving the subfolder layout above. Re-runnable, one-way, and it never deletes anything at the destination.
+
+Staged in tiers — 366 files, 11.65 GB total, verified by size after copying:
+
+| tier | files | size | what |
+|---|---|---|---|
+| `xbrl` | 259 | 9.23 GB | the SEC parquet the extract reads, plus `cal.parquet` |
+| `future` | 7 | 1.48 GB | Compustat/CRSP — no current script reads these, needed for the regression sample |
+| `outputs` | 11 | 0.48 GB | pipeline results and the hand-audit samples |
+| `checkpoint` | 87 | 0.44 GB | `scf_lines_parts/` + done log + scope guard; saves a ~33 min re-extract |
+| `required` | 2 | 0.01 GB | the Audit Analytics exports — the only files here that cannot be regenerated |
+
+`DRY_RUN` defaults to `TRUE`: it prints the plan with byte counts and stops. Set it to `FALSE` to transfer. Files already present with a matching size are skipped, so re-running after regenerating outputs is cheap. Comparison is by **size, not mtime**, because cloud sync rewrites timestamps and would cause endless re-copies.
+
+Deliberately excluded: the 80 GB of `.tsv` originals (keep them on the external drive as the archive), `*_tag.parquet` (2.4 GB, unread), and the other folders under `D:/XBRL` — `companyfacts.zip`, the per-CIK outputs of deleted scripts, the duckdb files — none of which are referenced anywhere in the repo.
+
+**Provenance:** the extracted parquet files were produced from SEC zip downloads by a script in a different project of Matt's, not in this repo. If the panel ever needs extending past 2023 M12, that download-and-unzip step has to come along too; worth moving into `Code/tools/` at that point so the chain from SEC zip → tsv → parquet → `001a` is documented in one place.
+
+A publish-to-Dropbox counterpart was designed but **deliberately not built** — pending whether the external coauthor (Ryan Robinson) needs data access at all. If he does, note that `scf_filing_with_aa` and `aa_cleaned` carry Audit Analytics–derived columns, so licensing needs checking before anything AA-derived goes into a shared folder.
 
 ### Phase 1 detection design (`001a`)
 

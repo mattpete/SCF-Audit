@@ -29,7 +29,7 @@
 # INPUT   {data_path}scf_section_adjusted{IN_SUFFIX}.parquet   (001b)
 #         {data_path}scf_line_changes_flagged{IN_SUFFIX}.parquet (001b)
 #         {data_path}scf_period_summary{IN_SUFFIX}.parquet      (001a)
-#         {raw_data_path}*_sub.parquet   (company name and fiscal period label)
+#         {data_path}XBRL/XBRL Extracted Data/*_sub.parquet   (company name and fiscal period label)
 # OUTPUT  {data_path}scf_filing_summary{IN_SUFFIX}.parquet
 #         {data_path}audit_sample_changed.csv
 #         {data_path}audit_sample_unchanged.csv
@@ -45,7 +45,6 @@ library(tidyr)
 library(lubridate)
 library(readr)
 
-raw_data_path <- Sys.getenv('XBRL_DATA_PATH')
 data_path     <- Sys.getenv('DATA_PATH')
 source("code/000-utilities-functions.R")
 
@@ -76,7 +75,7 @@ search <- bind_rows(
               stringsAsFactors = FALSE))
 
 filing_meta <- bind_rows(lapply(seq_len(nrow(search)), function(i) {
-  f <- glue("{raw_data_path}{search$year[i]}_{search$period[i]}_sub.parquet")
+  f <- glue("{data_path}XBRL/XBRL Extracted Data/{search$year[i]}_{search$period[i]}_sub.parquet")
   if (!file.exists(f)) return(NULL)
   read_parquet(f, col_select = c("adsh", "name", "fp", "fy", "form", "period")) |>
     filter(form %in% c("10-K", "10-Q", "10-K/A", "10-Q/A"))

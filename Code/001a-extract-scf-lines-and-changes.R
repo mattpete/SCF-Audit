@@ -61,7 +61,6 @@ library(lubridate)
 library(readr)
 library(readxl)
 
-raw_data_path <- Sys.getenv('XBRL_DATA_PATH')
 data_path     <- Sys.getenv('DATA_PATH')
 source("code/000-utilities-functions.R")
 
@@ -275,7 +274,7 @@ assign_sections <- function(pre_cf) {
 # Draw the pilot sample, if requested, from every filer that files a 10-K/10-Q.
 if (!is.null(PILOT_N_CIKS)) {
   cik_pool <- bind_rows(lapply(seq_len(nrow(search)), function(i) {
-    f <- glue("{raw_data_path}{search$year[i]}_{search$period[i]}_sub.parquet")
+    f <- glue("{data_path}XBRL/XBRL Extracted Data/{search$year[i]}_{search$period[i]}_sub.parquet")
     if (!file.exists(f)) return(NULL)
     read_parquet(f, col_select = c("cik", "form")) |>
       filter(form %in% c("10-K", "10-Q", "10-K/A", "10-Q/A")) |>
@@ -311,9 +310,9 @@ saveRDS(scope_now, scope_file)
 
 # Periods we expect to process: those whose three source files all exist.
 expected_periods <- search |>
-  mutate(has_src = file.exists(glue("{raw_data_path}{year}_{period}_sub.parquet")) &
-                   file.exists(glue("{raw_data_path}{year}_{period}_pre.parquet")) &
-                   file.exists(glue("{raw_data_path}{year}_{period}_num.parquet"))) |>
+  mutate(has_src = file.exists(glue("{data_path}XBRL/XBRL Extracted Data/{year}_{period}_sub.parquet")) &
+                   file.exists(glue("{data_path}XBRL/XBRL Extracted Data/{year}_{period}_pre.parquet")) &
+                   file.exists(glue("{data_path}XBRL/XBRL Extracted Data/{year}_{period}_num.parquet"))) |>
   filter(has_src) |>
   select(year, period)
 
@@ -343,9 +342,9 @@ mark_period_done <- function(yr, pd, n) {
 for (i in seq_len(nrow(search))) {
   yr <- search$year[i]; pd <- search$period[i]
 
-  f_sub <- glue("{raw_data_path}{yr}_{pd}_sub.parquet")
-  f_pre <- glue("{raw_data_path}{yr}_{pd}_pre.parquet")
-  f_num <- glue("{raw_data_path}{yr}_{pd}_num.parquet")
+  f_sub <- glue("{data_path}XBRL/XBRL Extracted Data/{yr}_{pd}_sub.parquet")
+  f_pre <- glue("{data_path}XBRL/XBRL Extracted Data/{yr}_{pd}_pre.parquet")
+  f_num <- glue("{data_path}XBRL/XBRL Extracted Data/{yr}_{pd}_num.parquet")
   if (!file.exists(f_sub) || !file.exists(f_pre) || !file.exists(f_num)) next
 
   # resume: skip periods already recorded as complete
