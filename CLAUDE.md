@@ -412,7 +412,7 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 4. **Feed AA matches into `001b`'s disclosed-correction override.** `001b` already refuses to attribute a period to a standard when an *amendment* disclosed a correction (the guard that rescued Akorn FY2014), but it runs before the AA link exists, so a period disclosed only through Audit Analytics gets no such protection. `002b` measures the exposure: the standards layer fully claimed **139 of 4,473 changed AA-matched fiscal years (3.1%)**. Small, but it is the Akorn failure mode arriving by a second route, and a real defect rather than a judgement call. The fix needs a dependency inversion, since `001b` would have to read `aa_cleaned.parquet` which `002a` currently writes: either move the AA cleaning into its own earlier script, or let `001b` take the AA event table as an optional input.
 5. **Read the 47 AA-flagged-but-undetected events** (`aa_validate_cf_flagged_no_change.csv`) — the candidate false-negative pool for the whole detection design, now small enough to read exhaustively rather than sample.
 6. **Decompose the 3,178 unmatched AA events whose CIK and era are both present** — 36% of all unmatched events, and the only part of the coverage gap that could be a join defect rather than genuine non-coverage.
-7. **Measure the income-statement change from XBRL** rather than taking AA's `chg_ni`, making the two magnitudes symmetric in the disclosure-decision test. Needs no re-extraction (net income is already present for 98.2% of periods) and routes around validation item 12. See the dNI test section.
+7. **Measure the income-statement change from XBRL** rather than taking AA's `chg_ni`, so the two magnitudes in the disclosure-decision test are symmetric. Needs no re-extraction (net income is already present for 98.2% of periods) and routes around validation item 12. **Note what the dNI diagnosis changed about the reason:** our net income change is a different measure from AA's, not a cleaner one, so the point is to make BOTH regressors the same kind of quantity rather than to make either more accurate. Lower priority than the CFO hand-validation.
 8. **The consequence tests, which are what lift this from a minimum paper to a top-tier one.** The disclosure-decision result establishes that firms treat SCF errors as immaterial; it does not establish that anyone is harmed. Candidates, in rough order of tractability: future cash flow prediction (does an unrevised CFO forecast future CFO worse?), return prediction around the revealing filing, analyst cash flow forecast errors (I/B/E/S), and covenant or credit-model settings where CFO is a direct input. Compustat/CRSP are already staged in `DATA_PATH`; I/B/E/S is not and would need acquiring.
 9. **Lower priority:** the residual 3,024 testable reconciliation failures (0.5%) — a footnote rather than more engineering.
 
@@ -427,7 +427,7 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 
 The idea, which is the best validation this project has: net income runs through **exactly the same machinery** as CFO, and AA hand-codes the income effect of every restatement independently. So reproducing AA's figure validates the machinery, and CFO inherits the credibility. Net income needed no new extraction, being the indirect-method SCF's top line (`NetIncomeLoss` 65.6% of periods, `ProfitLoss` 33.2%, the `[Income starting point]` collapse only 1.2%).
 
-**Result: the logic is correct, and the one failure mode is structural truncation rather than a bug.**
+**Result: the core logic is confirmed. The median ratio is exactly 1.000, and the piece most likely to have gone wrong (the YTD annual basis) contributes no error at all. But the match is only partial at the level of an individual event, and the reasons are diagnosed below.**
 
 | AA window length | events | median \|ours\| / \|AA\| | within 25% |
 |---|---|---|---|
@@ -438,6 +438,49 @@ The idea, which is the best validation this project has: net income runs through
 | 3+ years | 347 | 0.702 | 15.0% |
 
 The median is exact out to three years, which is precisely the comparative reach of a 10-K (current plus two prior), and then degrades. The share where we *understate* AA rises monotonically with fiscal years covered: 21.9% (1 yr) to 54.3% (5 yr). **A long restatement window's earliest years never appear in any later comparative, so they are structurally unobservable.** This is limitation 2 below, now quantified, and it applies to `cfo_change` identically: magnitudes for multi-year AA events are understated, so any test using them is conservative.
+
+### Why the rest do not tie, and the decision not to chase it
+
+Only about 44% of events tie within 25% on the loose comparison, so the misses were diagnosed. **Tested and ruled out:**
+
+| hypothesis | result |
+|---|---|
+| overlapping AA events for the same firm | **not the cause.** Firms with exactly one AA event tie 47.2%, firms with several 42.2%. A five-point gap. |
+| income shifted between years, cancelling in our signed sum | **not the cause.** Summing absolute per-year changes ties 43.2% versus 44.0% signed. No better. |
+| noncontrolling interests (`ProfitLoss` includes NCI, `NetIncomeLoss` does not) | explains 1 miss |
+| discontinued operations | explains 10 misses |
+| unit or scale errors (a clean power of ten) | explains 28 misses, 2.8% |
+| the amendment channel (AA codes the 10-K/A figure, we use the comparative) | ties 81 cases the comparative misses; helps, but minor |
+
+**What does matter is the number of fiscal years in the window**, and nothing else comes close:
+
+| | single fiscal year | multi-year |
+|---|---|---|
+| firm has 1 AA event | **60.7%** | 30.4% |
+| firm has several | **57.0%** | 27.5% |
+
+**But even the cleanest cell misses 39%** (one AA event, one fiscal year, n = 349: 61% tie, 51% match to within 0.5%), and the shape of the misses is the important part. The ratio distribution is p5 0.08, p25 **1.000**, p50 **1.000**, p75 1.014, p95 15.7 -- a spike at exactly 1.000 with long tails in *both* directions. Measurement noise would give a hump around 1.0. A spike plus two tails means two different quantities.
+
+**The explanation: our number and AA's are not the same measure.**
+
+- Ours is *every* change in the net income line between the original filing and the last comparative, whatever caused it.
+- AA's is *only the restatement's effect*, as the filer described it.
+
+So we read high when the period's net income also moved for unrelated reasons (another revision, a discontinued-operations recast, a segment or acquisition change), and low when the restatement hit years our comparatives cannot reach. Examples from the clean cell: TE Connectivity AA -138m vs ours -3,256m (23.6x); Cleveland-Cliffs AA -67.9m vs ours -1.5m (0.02x).
+
+**DECISION (Matt, Oct 2026): do NOT scope non-error causes of net income change into the XBRL scripts.** Identifying and subtracting every legitimate reason a period's net income moved would be a large build, it is not what the paper is about, and the payoff is small. The dNI test has already done the job it was designed for: it confirmed the anchoring, the per-line sign resolution and the YTD annual basis all work. Do not reopen this as an engineering task.
+
+**This is the thing to remember**, because it is easy to re-encounter the mismatch and mistake it for a bug: *net income will not tie to Audit Analytics for reasons that are not errors.* That is expected, it is not a defect in the pipeline, and fixing it is out of scope.
+
+### How to validate the CFO numbers instead (the plan)
+
+Effort is better spent validating the **cash flow** figures directly by hand, since those are what the paper rests on. Use the NI match as a way to **stratify** that validation, because the two strata test different things:
+
+**Stratum A, where NI ties.** Small sample. The same machinery produced both numbers, so if our NI recalculation is right here, the CFO figures should be right too -- expect close to 100% accuracy. Any failure in this stratum means something is wrong that the dNI test could not see, which would be the most valuable thing to learn.
+
+**Stratum B, where NI does not tie.** Larger sample, because this is where a systematic calculation problem would hide. The question is whether the CFO numbers are *also* wrong in these cases, or whether the NI mismatch was purely the construct difference above while CFO is fine.
+
+**The comparison between A and B is the actual test.** If CFO validates about equally well in both, the NI mismatch is definitional and gets documented rather than fixed. If CFO fails noticeably more often in B, there is a real calculation issue and B is where to find it.
 
 ### Rounding-precision changes pass the materiality floor
 
@@ -637,7 +680,7 @@ What has actually been verified, and what the results still rest on that nobody 
 
 ### Critical — could change the headline
 
-1. **Are silent revisions actually revisions?** No validation exists. Sample ~30 `silent_revision == TRUE` cases, open both filings, confirm the numbers genuinely differ and no disclosure exists. If a meaningful share are tagging artifacts rather than real revisions, 80% is wrong. **Nothing else on this list substitutes for it.**
+1. **Are silent revisions actually revisions?** No validation exists. Sample ~30 `silent_revision == TRUE` cases, open both filings, confirm the numbers genuinely differ and no disclosure exists. If a meaningful share are tagging artifacts rather than real revisions, 80% is wrong. **Nothing else on this list substitutes for it.** The agreed design for this is the two-stratum plan under "How to validate the CFO numbers instead": a small sample where our net income recalculation ties to Audit Analytics, and a larger one where it does not, so a systematic calculation problem would show up as a gap between the two.
 2. **The 240-case hand audit** (in progress) — validates the detection layer generally.
 3. **The 20.8% not-testable sections** (108,598 non-footing, 50,375 ambiguous, 6,762 unknown) are excluded from every headline figure and have never been hand-checked. If they contain real revisions we are *understating*; if noise, fine — currently unknown.
 
