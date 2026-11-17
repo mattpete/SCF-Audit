@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["found", "statement", "scale", "columns", "rows"],
+  "properties": {
+    "found": {
+      "type": "boolean",
+      "description": "True if this text is a financial statement containing numbers."
+    },
+    "statement": {
+      "type": "string",
+      "enum": ["cash_flow", "income_statement", "balance_sheet", "other", "none"],
+      "description": "Which statement the text actually is, judged from its title and content."
+    },
+    "scale": {
+      "anyOf": [
+        { "type": "string", "enum": ["ones", "thousands", "millions", "billions"] },
+        { "type": "null" }
+      ],
+      "description": "The multiplier stated in the header. Null if none is stated."
+    },
+    "columns": {
+      "type": "array",
+      "description": "One entry per printed column, in printed order, left to right. Includes every repeated period block.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["h", "end", "months"],
+        "properties": {
+          "h": {
+            "type": "string",
+            "description": "The column heading verbatim, as printed. Empty string if the column has no heading."
+          },
+          "end": {
+            "anyOf": [
+              { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+              { "type": "null" }
+            ],
+            "description": "The date the column ends, YYYY-MM-DD, read off the heading. Null if the heading gives no date."
+          },
+          "months": {
+            "anyOf": [
+              { "type": "integer", "minimum": 1, "maximum": 24 },
+              { "type": "null" }
+            ],
+            "description": "Months the column covers, from the heading. Null for a balance sheet instant or when the heading names no span."
+          }
+        }
+      }
+    },
+    "rows": {
+      "type": "array",
+      "description": "One entry per printed row of the statement, in printed order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["n", "l", "v", "x"],
+        "properties": {
+          "n": {
+            "type": "integer",
+            "description": "The row's position in the statement, counting every printed row from 1, including section headings and rows with no numbers."
+          },
+          "l": {
+            "type": "string",
+            "description": "The row label, verbatim."
+          },
+          "v": {
+            "type": "array",
+            "description": "This row's numbers, one per column, same length as columns. Null for a blank cell.",
+            "items": {
+              "anyOf": [{ "type": "number" }, { "type": "null" }]
+            }
+          },
+          "x": {
+            "type": "boolean",
+            "description": "True if this row's numbers are NOT in the statement's scale (per-share amounts, share counts, par value, ratios, percentages). False for ordinary dollar rows."
+          }
+        }
+      }
+    }
+  }
+}

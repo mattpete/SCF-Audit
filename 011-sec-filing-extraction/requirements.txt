@@ -1,0 +1,5 @@
+# 012a-extract-statements.py needs an anthropic SDK new enough to accept
+# output_config (structured outputs + effort). Install the current release:
+#     pip install -U anthropic
+# If output_config raises a TypeError, the SDK is too old - upgrade it.
+anthropic

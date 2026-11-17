@@ -86,6 +86,7 @@ Scope it correctly rather than caveating everything. It affects descriptive *tag
 - Open `SCF-Audit.Rproj` in RStudio and run scripts by sourcing them or executing line-by-line — there is no CLI build/lint/test entrypoint.
 - Required env vars, set in a local (gitignored) `.Renviron` at the repo root:
   - `DATA_PATH` — processed data folder (parquet outputs, taxonomy/restatement inputs)
+  - `SEC_DATA_PATH` — the filing-text extraction work in `011-sec-filing-extraction/` only (see its README). A separate OneDrive folder, deliberately not under `DATA_PATH`, so the two measurement approaches share no storage. **No trailing slash**, and those scripts must build paths with `paste0`, not `file.path`, which strips it.
   - `DROPBOX_PATH`, `XBRL_DATA_PATH` — optional, and only used by `Code/tools/sync-to-onedrive.R` to find the pre-OneDrive copies. Not needed to run the pipeline.
   - These are machine-specific (differ between personal/work computers) and never committed.
 - `Code/000-utilities-functions.R` is sourced by downstream scripts via `source("code/000-utilities-functions.R")` — run scripts from the repo root so this relative path resolves.
@@ -380,6 +381,40 @@ Two licensed exports in `DATA_PATH`, read by `002a`: `restatement-data-031425.xl
 ### `Code/000-utilities-functions.R`
 
 A general-purpose R helper library sourced by other scripts, not specific to any one pipeline stage: variable transforms (`winsorize_x`, `truncate_x`, `standardize_x`), Fama-French 12/49 industry classification from SIC codes (`assign_FF12`, `assign_FF49`), logistic regression holdout/performance helpers built for `rsample`/`broom` workflows, LaTeX/`modelsummary` formatting helpers, and an event-study trading-day window function (`trading_day_window`). Also sets global R options (no scientific notation, `America/New_York` timezone for date handling).
+
+## Second track: statement extraction from filing text (`011-sec-filing-extraction/`)
+
+Started Nov 2026, parallel to everything above and **not** part of the `001`/`002`
+chain. Instead of reading XBRL tags, it pulls the cleaned text of a filing off WRDS
+Cloud, locates the printed statement, and sends that block to the Claude API to
+recover the line items as structured rows. Matt's reason: the XBRL data is too
+messy for this.
+
+Two things it gets that the XBRL route cannot. It reaches back to **2002** rather
+than 2009, which is what Audit Analytics coverage and IBES cash flow forecasts
+actually need. And it sees the **printed line item**, not the tag, which is exactly
+the gap recorded as limitation 4 above.
+
+| | |
+|---|---|
+| Code | `011-sec-filing-extraction/` (at the repo root, not under `Code/`) |
+| Data | `SEC_DATA_PATH` — its own OneDrive folder, deliberately separate from `DATA_PATH` |
+| Source | WRDS Cloud filing text. **No EDGAR scraping** — settled, do not revisit |
+| State | locating the statements works (~99% coverage, 2-3 candidate blocks per filing). Extraction is **completely unrun**: no API call has ever been made |
+| Next | the API pilot, ~$1 for 500 filings on Haiku. Needs an API key and a Python install |
+| Full cost | ~$700 for the whole population on Haiku with the Batch API |
+
+**Read `011-sec-filing-extraction/README.md` before touching any of it.** It holds
+the measured hit rates, the parameter sweeps, the ledger design, the traps that
+pass every structural test (parent-only Schedule I statements, press-release
+exhibits, restatement reconciliations), and the reason the 500-filing sample cannot
+be redrawn. That detail is deliberately kept out of this file, which loads every
+session.
+
+**Unresolved, and it matters for how much of the work above survives:** whether
+this replaces the XBRL pipeline or runs beside it as a second, independent
+measurement. If it runs beside it, two methods agreeing is far stronger evidence
+than either alone, and it is the obvious way to settle validation item 1.
 
 ## Current status (as of 2026-10-15)
 
