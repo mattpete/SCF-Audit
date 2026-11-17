@@ -23,9 +23,29 @@ PAT <- paste0(
   "|statements?", S, "of", S, W, "financial", S, "(position|condition)",
   "|statements?", S, "of", S, W, "comprehensive", S, "income",
   "|balance", S, "sheets?",
+  ## THE EQUITY STATEMENT TITLE. Not a statement we extract, but it is printed
+  ## between the income statement and the cash flow statement in most filings,
+  ## so without a marker for it the locator cannot see that boundary and pulls
+  ## the preceding statement into the cash flow block. Donnkenny's 10-K is the
+  ## case: its cash flow block opened on "Consolidated Statements of
+  ## Stockholders' Equity" and ran through to the cash flow statement below.
+  "|statements?", S, "of", S, W, "(share|stock)holders.{0,3}", S, "?(equity|deficit)",
+  "|statements?", S, "of", S, W, "changes", S, "in", S, W, "equity",
   ## cash-flow section headers (the three sections)
   "|cash", S, "flows?", W, "(operating|investing|financing)",
   "|cash", S, "(used|provided)", W, "(operating|investing|financing)",
+  ## ...and the BARE section header. Plenty of filers print just "OPERATING
+  ## ACTIVITIES:" with no "cash flows from" in front of it, and with only the
+  ## two patterns above those lines were never captured at all - so no marker
+  ## existed for them and 011d could not tell a whole statement from one
+  ## missing a section. Measured: the investing landmark was absent from 107
+  ## otherwise-sound cash flow spans for exactly this reason.
+  "|(operating|investing|financing)", S, "activities",
+  ## the reconciliation line, which is the top of the operating section: it
+  ## sits directly under the income starting point and above the first
+  ## adjustment. Present in 79% of filings, and the best available anchor
+  ## where the section header is phrased unusually.
+  "|adjustments?", S, "to", S, "reconcile",
   ## cash-flow terminal
   "|cash", W, "end", S, "of",
   "|end", S, "of", S, "(the", S, ")?(period|year|quarter)",
@@ -33,14 +53,80 @@ PAT <- paste0(
   "|supplemental", S, "(disclosure|cash|information)",
   ## income-statement content
   "|(net|total)", S, "(sales|revenues?)",
-  "|net", S, "(income|loss|earnings)",
+  ## ...and the BARE revenue line. Requiring "net" or "total" in front missed
+  ## every filer that prints simply "Revenue", "Revenues", "Sales" or
+  ## "Revenue, net", which is common. Bloomia Holdings is the case: its real
+  ## income statement was found and then rejected for having no revenue
+  ## landmark, because the landmark had never been captured.
+  "|^", S, "?(revenues?|sales)", S, "?[,:]?", S, "?$",
+  "|(revenues?|sales)", S, "?,", S, "net",
+  ## the revenue line WITH its amounts on the same line. Anchoring the bare
+  ## pattern to the end of the line only catches a label printed alone, so
+  ## "Revenue 1,234 5,678" was never captured - which is why Clean Energy
+  ## Technologies' real income statement was found and then rejected for
+  ## having no revenue landmark. Requiring a digit, $ or ( straight after the
+  ## word keeps prose like "Revenue Recognition" out.
+  ##
+  ## The bracket is ordered "(" before "$" ON PURPOSE. This pattern is shipped
+  ## to a POSIX shell on WRDS, and R's shQuote() defaults to type = "cmd" on
+  ## Windows, which wraps the pattern in DOUBLE quotes - so a "$(" sequence
+  ## anywhere in it becomes command substitution and the remote shell executes
+  ## part of the regex. The symptom is silent and total: grep returns nothing
+  ## for every filing, 011b saves an EMPTY marker file over the good one, and
+  ## the next script reports zero rows with no error anywhere. shQuote(type =
+  ## "sh") below is the actual fix; this ordering is belt and braces.
+  "|^", S, "?(revenues?|sales)", S, "?[,:]?", S, "?[0-9($]",
+  ## NOT "revenue from contracts with customers": that matches the ASC 606
+  ## reference in the accounting-policies footnote and the XBRL element
+  ## labels ("revenue from contract with customer [abstract]"), and it picked
+  ## Clean Energy's footnote as its income statement. Measured: exactly 3
+  ## filings in 500 had it as their only revenue landmark, against this cost.
+  ## "profit" belongs with income/loss/earnings - Clean Energy's bottom line
+  ## reads "Net profit / (loss)", so leaving it out lost the landmark.
+  "|net", S, "(income|loss|earnings|profit)",
   "|(income|loss)", S, "before", S, W, "tax",
+  ## FINANCIAL FIRMS. A bank's income statement has no "net sales" and no
+  ## "total revenues" - it opens with interest income - so the revenue
+  ## landmark was unfindable for the whole sector and 505 income-statement
+  ## spans failed on it. Financials are IN SCOPE for this track (Matt,
+  ## 2026-11-17), so these are first-class patterns, not edge cases.
+  "|(total|net)", S, "interest", S, "(income|expense|revenue)",
+  "|interest", S, "and", S, "(dividend|fee)", S, W, "income",
+  "|(total|net)", S, "(premiums?|revenues?", S, "and", S, "other", S, "income)",
+  "|premiums?", S, "(earned|written)",
+  "|(total|net)", S, "(interest|non.?interest)", S, "income", S, "after",
+  "|provision", S, "for", S, W, "(loan|credit|lease)", S, W, "loss",
   "|per", S, "(common", S, "|basic", S, "|diluted", S, ")?share",
   "|earnings", S, "per", S, "share",
   ## balance-sheet content
   "|total", S, "assets",
   "|total", S, "current", S, "(assets|liabilities)",
   "|total", S, "(liabilities|equity|shareholders|stockholders|capitalization)",
+  ## A bank's balance sheet has no current/non-current split at all, so
+  ## "total current assets" never appears and the top-of-statement anchor was
+  ## missing for financials. Deposits are the landmark that replaces it.
+  "|total", S, "deposits",
+  ## THE TWO SECTION HEADINGS, on their own line. These are the only
+  ## layout-independent landmarks the balance sheet has, because a filer can
+  ## print the TOTAL with no label at all: Amerisafe's 10-K shows total assets
+  ## as "$ 1,148,509 $ 1,117,923" on a line of its own, the HTML label cell
+  ## being empty. No word pattern can reach that line, so its real balance
+  ## sheet produced no candidate and the locator was left choosing among
+  ## footnote tables. Every balance sheet has these headings.
+  "|^", S, "?assets", S, "?:?", S, "?$",
+  "|^", S, "?liabilities(", S, "and", S, W, "equity)?", S, "?:?", S, "?$",
+  ## RESTATEMENT RECONCILIATION COLUMNS. A footnote that reconciles a restated
+  ## statement is captioned with the statement's own name and carries its
+  ## totals, so it satisfies every structural landmark - Amerisafe's "As
+  ## Reported / Adjustments / As Adjusted" table was chosen as its balance
+  ## sheet. These column captions are what a primary statement never has, and
+  ## catching them matters beyond this one case: for THIS project the
+  ## restatement footnote is the single most dangerous false positive, since
+  ## it is where the revisions we are trying to measure are described.
+  "|as", S, "(previously", S, ")?(reported|adjusted|restated|revised)",
+  "|previously", S, "reported",
+  "|effect", S, "of", S, W, "(restatement|adjustment|revision|correction)",
+  "|(cash", S, "and", S, "(cash", S, "equivalents|due", S, "from)|due", S, "from", S, "banks)",
   ## SCALE. Without this the chunk cannot be padded up far enough to include the
   ## multiplier, and every extracted number comes out 1,000x or 1,000,000x wrong.
   ## Measured: NONE of four hand-checked chunks contained their scale line, because
@@ -62,7 +148,7 @@ s <- ssh_connect(paste0(key_get("wrds-user"), "@wrds-cloud.wharton.upenn.edu"),
                  passwd = key_get("wrds-password"))
 remote <- paste0('
 R=/wrds/sec/wrds_clean_filings
-P=', shQuote(PAT), '
+P=', shQuote(PAT, type = "sh"), '
 while read FF; do
   p="$R/$FF"
   [ -f "$p" ] || continue
@@ -107,5 +193,23 @@ M <- data.frame(wrdsfname=ff[keep], nlines=nl[keep], line=lno[keep],
                 text=gsub("[[:space:]]+", " ", txt[keep]), stringsAsFactors=FALSE)
 M <- M[!is.na(M$wrdsfname) & nzchar(M$wrdsfname), ]
 M <- merge(M, d, by="wrdsfname")
-saveRDS(M, paste0(SP, "markers4_raw.rds"))
-cat("\nrows:", nrow(M), " filings:", length(unique(M$wrdsfname)), "\n")
+## ---- REFUSE TO SAVE A COLLAPSED RESULT -----------------------------------
+## This script used to save unconditionally, and that turned one bad character
+## in the pattern into a destroyed cache: the remote grep matched nothing for
+## every filing, an empty marker file replaced the good one, and the failure
+## surfaced two scripts later as "0 rows" with no error to trace. A run that
+## finds markers for fewer than half the filings it asked about has failed,
+## whatever the exit status said, so it stops here with the old file intact.
+got <- length(unique(M$wrdsfname))
+cat("\nrows:", nrow(M), " filings:", got, "of", nrow(d), "\n")
+out <- paste0(SP, "markers4_raw.rds")
+if (nrow(M) == 0 || got < nrow(d) / 2) {
+  stop(sprintf(paste0("markers collapsed: %d rows for %d of %d filings. ",
+                      "NOT saving - %s is unchanged.\n",
+                      "  Check the grep pattern reached the remote shell intact: ",
+                      "a '$(' sequence in PAT becomes command substitution if the ",
+                      "pattern is double-quoted (see the shQuote note above)."),
+               nrow(M), got, nrow(d), out), call. = FALSE)
+}
+saveRDS(M, out)
+cat("saved", out, "\n")

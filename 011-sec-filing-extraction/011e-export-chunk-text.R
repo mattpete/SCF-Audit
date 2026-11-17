@@ -199,6 +199,49 @@ D <- merge(D, C[, c("wrdsfname", "kind", "rank", "start", "end", "len",
            by.x = c("wrdsfname", "kind", "rank_used"),
            by.y = c("wrdsfname", "kind", "rank"), all.x = TRUE)
 D <- merge(D, fi, by = "wrdsfname", all.x = TRUE)
+
+## ---- drop PAGE FURNITURE from the block text -----------------------------
+## HTML filings put a "Table of Contents" back-link at the top of every page,
+## so it lands INSIDE a statement wherever the statement crosses a page
+## boundary, not only between statements (Matt, 2026-11-17). The same is true
+## of the notes reference, the page number, and the "(continued)" marker, and
+## XBRL-rendered filings carry the viewer's JavaScript at the top of the block.
+##
+## None of it is statement content, and the string cannot be used as a
+## boundary signal precisely because it appears mid-statement - so it is
+## removed from the text rather than reasoned about.
+##
+## Measured on 1,412 blocks before this was added: 2,797 furniture lines, in
+## 1,084 blocks (77%). The contents back-link alone appeared in 560 blocks and
+## 16% of its occurrences were in the middle of the block, confirming the
+## mid-statement case. Safety check on the same data: ZERO furniture lines
+## carried a figure with a comma or a dollar sign, so nothing with a value in
+## it is at risk. The patterns are anchored to whole lines for that reason -
+## in particular there is deliberately no bare-number rule, because a lone
+## "3" is as likely to be an amount as a page number.
+FURNITURE <- paste0(
+  "^(back to |return to )?table of contents$|^index$",
+  "|^see (the )?(accompanying|notes)|^the accompanying notes",
+  "|^see notes to|^accompanying notes to",
+  "|^[-(]?continued[-)]?$",
+  "|^<page>|^page [0-9]+$|^f-[0-9]+$",
+  "|^function |^if \\(e\\.|^\\} else \\{|do not remove this comment",
+  "|^</?(type|sequence|filename|description|text)>")
+
+strip_furniture <- function(txt) {
+  v <- strsplit(txt, "\n", fixed = TRUE)[[1]]
+  k <- !grepl(FURNITURE, gsub("[[:space:]]+", " ", tolower(trimws(v))), perl = TRUE)
+  paste(v[k], collapse = "\n")
+}
+n_before <- sum(lengths(strsplit(D$text, "\n", fixed = TRUE)))
+D$text   <- vapply(D$text, strip_furniture, character(1), USE.NAMES = FALSE)
+n_after  <- sum(lengths(strsplit(D$text, "\n", fixed = TRUE)))
+cat(sprintf("\npage furniture removed: %d of %d lines (%.1f%%)\n",
+            n_before - n_after, n_before, 100 * (n_before - n_after) / n_before))
+
+## NOTE: `len` and `nnum` describe the ORIGINAL line range in the filing and
+## are deliberately left alone, so a block can still be found again on WRDS by
+## its line numbers. Only `chars` is recomputed, below, from the trimmed text.
 D$chars <- nchar(D$text)
 
 cat("\nchars  median", median(D$chars), " mean", round(mean(D$chars)),
