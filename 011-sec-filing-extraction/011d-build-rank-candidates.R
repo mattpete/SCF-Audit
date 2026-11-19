@@ -56,17 +56,57 @@ M   <- readRDS(paste0(SP, "markers4_raw.rds"))
 NUM <- readRDS(paste0(SP, "numlines.rds"))
 t <- M$text
 
+## ---- A TITLE IS A TITLE LINE, NOT A PHRASE IN A SENTENCE -----------------
+## "balance sheet" and "statements of cash flows" appear constantly in prose,
+## and a title pattern that matches anywhere in the line matches all of it.
+## Biomet's 10-K is the case: 13 lines match the balance-sheet title pattern
+## and exactly one is the real title. The block was anchored on
+##
+##   "amounts recognized in the companys consolidated balance sheets consist
+##    of the following:"
+##
+## which is the opening sentence of the PENSION FOOTNOTE, and the span ran 672
+## lines through it.
+##
+## Two tests, both about where the phrase sits rather than what it says:
+##
+##  1. it must start the line or follow whitespace, so "off-balance sheet
+##     arrangements" is not a balance sheet; and
+##  2. whatever precedes it must read like a NAME, not like a sentence.
+##
+## Test 2 deliberately does NOT reject bare prepositions. A company name
+## carries them - "Bank of America Corporation Consolidated Balance Sheets" -
+## and financials are in scope on this track, so rejecting "of" would throw
+## away the sector. It rejects verbs, pronouns and two-word prepositional
+## phrases ("in the", "on the"), which prose has and a company name does not.
+PROSE <- paste0(
+  "(^|[[:space:]])(we|our|us|their|its|these|those|have|has|had|been|was|were",
+  "|is|are|be|consist|consists|recognized|recognised|included|includes",
+  "|including|reported|approximate|approximates|reflected|presented|comprise",
+  "|comprises|shown|relating|related|refer|see)([[:space:]]|$)",
+  "|(in|on|to|at|from|with|of|for)[[:space:]]+the[[:space:]]")
+
+title_like <- function(t, rx) {
+  p <- regexpr(rx, t, perl = TRUE)
+  ok <- p > 0
+  pre <- ifelse(ok, substr(t, 1, pmax(0L, p - 1L)), "")
+  at_word_start <- ok & (p == 1L | grepl("[[:space:]]$", pre))
+  at_word_start & !grepl(PROSE, pre, perl = TRUE)
+}
+
 ## ---- concept flags (a line can carry more than one) ----
 F <- data.frame(
-  ttl_cf = grepl("statements? of .{0,40}cash flows?", t),
-  ttl_is = grepl("statements? of .{0,40}(income|operations|earnings)", t),
-  ttl_bs = grepl("balance sheets?|statements? of .{0,40}financial (position|condition)", t),
-  ttl_ci = grepl("statements? of .{0,40}comprehensive income", t),
+  ## every title goes through title_like(), so a mention of the statement in
+  ## a sentence is not mistaken for its heading
+  ttl_cf = title_like(t, "statements? of .{0,40}cash flows?"),
+  ttl_is = title_like(t, "statements? of .{0,40}(income|operations|earnings)"),
+  ttl_bs = title_like(t, "balance sheets?|statements? of .{0,40}financial (position|condition)"),
+  ttl_ci = title_like(t, "statements? of .{0,40}comprehensive income"),
   ## We never extract the equity statement, but it is printed between the
   ## income statement and the cash flow statement, so it has to be visible as
   ## a BOUNDARY or the block before it gets swallowed (Donnkenny).
-  ttl_eq = grepl(paste0("statements? of .{0,40}(share|stock)holders.{0,3} ?(equity|deficit)",
-                        "|statements? of .{0,40}changes in .{0,20}equity"), t),
+  ttl_eq = title_like(t, paste0("statements? of .{0,40}(share|stock)holders.{0,3} ?(equity|deficit)",
+                             "|statements? of .{0,40}changes in .{0,20}equity")),
   ## THE OPERATING SECTION BANNER - the top of the cash flow statement proper,
   ## and the landmark a clipped statement is missing.
   ##
@@ -127,6 +167,13 @@ F <- data.frame(
   recon = grepl(paste0("as (previously )?(reported|adjusted|restated|revised)",
                        "|previously reported",
                        "|effect of .{0,40}(restatement|adjustment|revision|correction)"), t),
+  ## a consolidating schedule's column captions - guarantor notes, Schedule I
+  ## parent-only statements. See the note in 011b: these are complete
+  ## statements of the WRONG entity set, and they foot.
+  consolidating = grepl(paste0("eliminations?|non.?guarantors?|guarantors?",
+                               "|condensed consolidating",
+                               "|parent (company )?only|parent.only",
+                               "|schedule i+ ?[-(]"), t),
   bs_teq = grepl("total (equity|shareholders|stockholders|capitalization)", t),
   sc_unit = grepl(paste0("in (thousands|millions|billions)",
                          "|(thousands|millions|billions) of (u[.]?s[.]?)?dollars",
@@ -334,11 +381,15 @@ build <- function(x) {
       ## captions sit in the header, so only the top of the span is tested -
       ## a primary statement can legitimately mention a revision further down
       ## in a note reference, and this must not reject it for that.
-      is_recon <- any(x$recon[x$line >= S & x$line <= min(E, S + RECON_HEAD)])
+      hdr <- x$line >= S & x$line <= min(E, S + RECON_HEAD)
+      is_recon <- any(x$recon[hdr])
+      is_cons  <- any(x$consolidating[hdr])
       out[[length(out)+1]] <- data.frame(kind=ty, start=S, end=E, len=E-S+1,
-        how=how, titled=S0 %in% own, complete=all(got) && !is_recon,
+        how=how, titled=S0 %in% own,
+        complete=all(got) && !is_recon && !is_cons,
         nreq=sum(got),
-        miss=paste(c(names(got)[!got], if (is_recon) "RECON"), collapse=","),
+        miss=paste(c(names(got)[!got], if (is_recon) "RECON",
+                     if (is_cons) "CONSOLIDATING"), collapse=","),
         stringsAsFactors=FALSE)
     }
   }

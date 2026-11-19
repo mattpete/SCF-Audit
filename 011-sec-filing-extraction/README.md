@@ -601,9 +601,144 @@ The residual non-trust misses are Exhibit 13 incorporation by reference, unusual
 statement titles, and financial-sector filers whose statements carry different
 names.
 
+**Reproduced independently on a fresh sample, 2026-11-18.** 12 of the 17 misses
+on the 500-filing holdout below were asset-backed trusts, with no statement
+title of any kind anywhere in the document — Household Automotive Trust, WaMu
+Mortgage Pass Through, GS Mortgage Securities, Santander Drive Auto
+Receivables, RASC, CWABS, JP Morgan Commercial Mortgage and more. Two others
+were a royalty trust (San Juan Basin, which presents "Statements of
+Distributable Income" and "Assets, Liabilities and Trust Corpus") and a
+commodity trading partnership (Nestor Partners). The same conclusion holds:
+these are entity types that present no conventional statements, not locator
+failures, and the Compustat screen removes them.
+
+---
+
+## Approach C: cut the statements apart at their page headers (`011h` + `011i`)
+
+Three locators now exist for the same job and all three are live. **A** is
+`011d`: search the whole filing once per statement, require that statement's
+full structure, use adjacency as a tiebreak. **B** is `011f-locate-anchored.R`:
+find the cash flow statement under strict rules, then bracket a section around
+it and look for the other two inside with the requirements relaxed. **C** is
+`011i`, below, and it is the one that works best.
+
+**The page-header invariant.** Every statement page prints the same six things
+within about twenty lines: a page number, the company name, the statement
+title, the scale, the period header, and the column years. Footnote tables
+never carry all of that — above all they do not reprint the period. So a title
+only becomes a header when a period line or column dates sit just below it, and
+**a statement runs from its header to the next header.** No content landmark is
+needed, which is what frees C from the structure requirements that made A and B
+miss filings with no EPS line or no labelled totals.
+
+Two gates remove the impostors. A contents list prints its entries stacked
+together, so a title crowded by other titles is rejected; and a contents entry
+is followed by a page number rather than figures, so a title without at least
+six numeric lines below it is rejected.
+
+### Four fixes from four filings, 2026-11-18
+
+Every one came from a single filing that broke the obvious version. The case is
+named in the comment beside each rule in `011i`; do not simplify without
+reading it.
+
+| fix | the filing that exposed it |
+|---|---|
+| the crowding test counted **grep rows, not distinct titles** — and 011h greps joined line pairs, so one title counts twice. Any second title within the window then rejected both | **D.R. Horton** Q3 2006. A textbook balance sheet header at line 191, killed by an exhibit-index line, "Statement of Computation of Ratio of Earnings to Fixed Charges", sitting exactly 20 lines above it |
+| run selection preferred the run **nearest** the anchor. Some run is always nearest, and nothing checked the anchor was in it | **CIK 72207** 2007. 011f's anchor landed at 2861–2919, the statements are at 166–781, and a junk run was a thousand lines closer. The right run won only because the junk run was below `RUN_MIN` |
+| `Income Statements` — the noun first, no "of" anywhere | **DuPont** Q2 2004 |
+| `Cashflows` as one word | **Norwood Financial** Q3 2002. The most alarming of the four: the cash flow statement, invisible for want of a space |
+
+Run selection now asks, in order: does the run **hold** the anchor; how many
+**different** statements are in it; does it hold a cash flow statement at all;
+and only then, how near is it.
+
+### A filing is never shipped short
+
+Every 10-K and 10-Q contains all three statements, so a filing missing one here
+is a locator failure and dropping it loses the observation for nothing but
+cost. Priced over the population, sending more text for the filings the headers
+do not cover adds about 9% to the job — not a reason to lose 13.6% of the
+sample (Matt, 2026-11-18).
+
+So where the headers do not yield all three, the filing ships as a **window**:
+the tightest stretch of the filing holding a title of all three kinds, which is
+what a statements section is. Centring that window on the cash flow anchor was
+tried first and rescued only 52 of 70 — the anchor is exactly what is
+unreliable on the filings that reach this fallback, so using it to place the
+rescue reproduces the failure it is rescuing. Title spans took it to 66 of 70
+*and* made the windows smaller, a median 924 lines against 2,650.
+
+This also moves the hard part to where it is done better. Choosing which block
+is the real income statement is what the regex keeps getting wrong; given a
+wide window the model reads the statements directly.
+
+A comprehensive-income statement counts as the income statement **only when the
+filing prints no separate one** — Payoneer Q2 2021 prints just "Condensed
+Consolidated Statements of Comprehensive Loss", while International Bancshares
+prints both and conflating them is what made B pick the wrong one.
+
+### Measured, 2026-11-18
+
+Denominator is the full 500-filing sample in each column, **not** the filings
+the locator returned something for. A filing that came back empty is a miss.
+
+| | tuned sample | **fresh holdout** |
+|---|---|---|
+| covered: all three cut, or in a window | 490 (98.0%) | **483 (96.6%)** |
+| excluding asset-backed trusts | — | **483 of 488 (99.0%)** |
+| genuine misses on ordinary operating companies | — | **3 of 500** |
+
+**The holdout is the number to trust.** Every fix above was derived from a
+filing inside the original 500, and six of the eleven cases sit in the half
+that was meant to be held out, so that sample's figure is fitted. `011j` draws
+a fresh 500 excluding the original one; see "Running a second sample" below.
+
+The three real misses are Churchill Downs Q1 2007 (no income statement title
+anywhere), Provident Bankshares Q1 2002 (no balance sheet title) and one other.
+
+**What this does NOT establish.** It says the statements are present in what we
+send. It says nothing about whether the right one is extracted — that choice is
+now deliberately the model's, and it is exactly where the hand audit found
+errors before (3 of 10 wrong under B). No extraction has ever run.
+
+### Running a second sample without destroying the first
+
+`011b`, `011c`, `011f`, `011h` and `011i` all take **`PILOT`**, an environment
+variable naming the cache directory under `SEC_DATA_PATH`; it defaults to
+`pilot-2026-11`. Without it a second run overwrites `dev_d.rds` and
+`loc_d.rds`, which are the only record of which filings every number in this
+file refers to and cannot be regenerated.
+
+```sh
+Rscript 011j-draw-holdout-sample.R                 # writes holdout-2026-11/
+export PILOT=holdout-2026-11
+Rscript 011b-scan-statement-markers.R              # remote, ~25 min
+Rscript 011c-map-numeric-lines.R                   # remote
+Rscript 011f-locate-anchored.R                     # the cash flow anchors
+Rscript 011h-scan-page-headers.R                   # remote, ~26 min
+Rscript 011i-locate-by-page-headers.R
+```
+
+`011f` skips its comparison with `011d` when there is no `pick9.rds`, so a
+fresh sample does not need `011d` run first.
+
+**`011h` scans the whole sample, not `011f`'s picks.** It used to read
+`pick_anch.rds`, which meant C only ever saw filings where B had already found
+a cash flow statement — 22 of the holdout's 500 were never scanned at all and
+could not be located by any means. C does not need B any more: window placement
+uses title spans and run selection falls back to counting distinct kinds.
+
 ---
 
 ## Known remaining defects
+
+- **Two files are called `011f`.** `011f-export-for-review.pl` (the review
+  exporter, documented below) and `011f-locate-anchored.R` (approach B, added
+  2026-11-17). The letters are supposed to run in execution order, so one of
+  them should be renamed; left alone for now because both are referred to by
+  letter in working notes.
 
 - Income statement is still weakest on every measure: located for 82.8% of
   filings against 91.2% cash flow and 91.4% balance sheet, and complete on
@@ -708,6 +843,51 @@ strings. Three things therefore happen downstream, not in the model:
    silently mis-assigned. `012a` records this as `n_bad_rows`.
 2. **Period assignment** — parse "Nine Months Ended September 30, 2022".
 3. **Column selection** — keep year-to-date, drop quarter-to-date, by label.
+
+### A row with fewer numbers than columns, and why the model must not place it
+
+The count check above has a legitimate exception, and it is the sharpest case
+of "the model must not decide". In the WRDS text conversion every cell sits on
+its own line and a **blank cell prints nothing at all**, so a row with a figure
+in only one of several columns arrives as a label and one number, with nothing
+on the page saying which column it belongs to. Dover Downs' Q2 2006 cash flow
+statement has four such rows.
+
+A model asked to place them will add the section up and work out where they
+must go. That is exactly the wrong division of labour: it is arithmetic on
+numbers that may have been misread, performed where we cannot check it.
+
+So the contract, added 2026-11-17: the model **fills from the left, pads with
+null, and sets `u` true** on that row. Placement happens in `012b` by footing,
+against the printed subtotal, and only where **exactly one** arrangement foots
+every column. A tie leaves the row flagged, because a guess that cannot be
+checked is worse than a flag that can.
+
+- **Cash flow and balance sheet** work identically — the components sum to the
+  subtotal and the printed sign is the arithmetic sign.
+- **The income statement also needs a sign per line.** Expenses print positive
+  and are subtracted, so the components *net* to the subtotal and the page does
+  not say which lines add. Signs are shared across columns, so the columns with
+  nothing missing pin them: Biomet's FY2010 statement has four columns, two of
+  them clean, and those two determine the signs outright. The convention is
+  tried first (components subtract under a running subtotal, add under a
+  "total X"); enumeration is only a fallback, which is why `MAX_COMB` rarely
+  binds.
+- **A section with no clean column still resolves** when only one sign vector
+  is possible. Dover Downs' financing section is the case — both its columns
+  await a value — and bailing out there took the cash flow statement from 100%
+  resolved to 0%.
+
+Verified on six cases: Dover Downs (2 columns, 4 ambiguous rows, 8/8 placed
+correctly), a three-column cash flow where one row prints two numbers of three
+and neither row's truth is column 1 (6/6), Biomet's real income statement (4
+columns, signs unknown, 8/8), a synthetic balance sheet, a mixed-sign income
+statement block where interest expense subtracts while interest income adds so
+the convention foots nothing and the sign search has to run (3/3), and a
+genuine tie, which correctly placed nothing.
+
+New frame columns: `col_unplaced`, `col_placed_by_footing`. `amount` is
+recomputed after any move.
 
 ---
 
@@ -958,6 +1138,11 @@ is not a step has no number and lives in `diagnostics/`.
 | `011d-build-rank-candidates.R` | yes | brackets each statement top-to-bottom, requires its full structure, picks the adjacent triple → `chunks8.rds` (all candidates, ranked) + `pick9.rds` (rank 1) |
 | `011e-export-chunk-text.R` | yes | pulls the chosen text off WRDS, strips page furniture → **`extract/chunks.jsonl`**, the handoff to step 012 |
 | `011f-export-for-review.pl` | on demand | **VALIDATION.** Writes the located text as human-readable `.txt` with an index, one file per filing × statement |
+| `011f-locate-anchored.R` | yes | **approach B.** Finds the cash flow statement standalone, brackets a section around it, locates the other two inside with the requirements relaxed → `chunks_anch.rds`, `pick_anch.rds`. Still the source of the cash flow **anchor** that `011i` ranks against |
+| `011g-export-all-candidates.R` | yes | ships **every** passing candidate plus rank 1, both company names attached, so the model chooses rather than the regex. `IN_CHUNKS` selects `chunks_anch.rds` or `chunks_hdr.rds` |
+| `011h-scan-page-headers.R` | yes | second remote grep, on **joined line pairs** so a title split mid-phrase matches whole: titles, period headers, column dates, scale, company names, contents markers → `markers_hdr.rds` |
+| `011i-locate-by-page-headers.R` | yes | **approach C,** the one that works best. Cuts each statement from its page header to the next, falls back to a title-span window so no filing ships short → `chunks_hdr.rds` |
+| `011j-draw-holdout-sample.R` | on demand | draws a fresh sample excluding the original one, into its own `PILOT` cache directory |
 
 `011b` and `011c` are independent of each other; both feed `011d`. **`011d`
 needs `numlines.rds`**, not just for diagnostics — the figures requirement and

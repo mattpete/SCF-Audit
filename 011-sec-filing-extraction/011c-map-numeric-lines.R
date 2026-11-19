@@ -9,8 +9,17 @@
 ## ============================================================================
 ## One pass per filing: line numbers that contain a statement-like number.
 suppressMessages({library(keyring); library(ssh)})
-SP <- paste0(Sys.getenv("SEC_DATA_PATH"), "/pilot-2026-11/cache/")
-M <- readRDS(paste0(SP, "markers3.rds"))
+## PILOT selects which run this is. Default is the original pilot; set it to
+## run the same chain over a different sample WITHOUT overwriting the original
+## cache, which holds the only record of which filings the README numbers refer
+## to and cannot be regenerated (Matt, 2026-11-18).
+PILOT <- Sys.getenv("PILOT", "pilot-2026-11")
+SP <- paste0(Sys.getenv("SEC_DATA_PATH"), "/", PILOT, "/cache/")
+## The filing list only. markers3.rds is an early intermediate that a fresh
+## sample never produces, so fall back to what 011b writes.
+mf <- paste0(SP, "markers3.rds")
+if (!file.exists(mf)) mf <- paste0(SP, "markers4_raw.rds")
+M <- readRDS(mf)
 ff <- unique(M$wrdsfname)
 cat("filings:", length(ff), "\n")
 

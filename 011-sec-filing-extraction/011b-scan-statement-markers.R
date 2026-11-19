@@ -9,16 +9,25 @@
 ## ============================================================================
 ## PASS 1e: add the markers needed for a COMPLETENESS test on each statement.
 suppressMessages({library(keyring); library(ssh)})
-SP <- paste0(Sys.getenv("SEC_DATA_PATH"), "/pilot-2026-11/cache/")
+## PILOT selects which run this is. Default is the original pilot; set it to
+## run the same chain over a different sample WITHOUT overwriting the original
+## cache, which holds the only record of which filings the README numbers refer
+## to and cannot be regenerated (Matt, 2026-11-18).
+PILOT <- Sys.getenv("PILOT", "pilot-2026-11")
+SP <- paste0(Sys.getenv("SEC_DATA_PATH"), "/", PILOT, "/cache/")
 dev <- readRDS(paste0(SP, "dev_d.rds")); tst <- readRDS(paste0(SP, "loc_d.rds"))
 d <- unique(rbind(cbind(dev[, c("wrdsfname","form")], set="dev"),
                   cbind(tst[, c("wrdsfname","form")], set="test")))
 d <- d[!duplicated(d$wrdsfname), ]
 
 S <- "[[:space:]]+"; W <- ".{0,40}"
+## An OPTIONAL space, because Norwood Financial writes "Cashflows" as one word
+## and a required space missed its cash flow statement entirely. Same fix as
+## in 011h (Matt, 2026-11-18).
+S0 <- "[[:space:]]*"
 PAT <- paste0(
   ## titles
-  "statements?", S, "of", S, W, "cash", S, "flows?",
+  "statements?", S, "of", S, W, "cash", S0, "flows?",
   "|statements?", S, "of", S, W, "(income|operations|earnings)",
   "|statements?", S, "of", S, W, "financial", S, "(position|condition)",
   "|statements?", S, "of", S, W, "comprehensive", S, "income",
@@ -113,8 +122,13 @@ PAT <- paste0(
   ## being empty. No word pattern can reach that line, so its real balance
   ## sheet produced no candidate and the locator was left choosing among
   ## footnote tables. Every balance sheet has these headings.
-  "|^", S, "?assets", S, "?:?", S, "?$",
-  "|^", S, "?liabilities(", S, "and", S, W, "equity)?", S, "?:?", S, "?$",
+  ## The heading may carry its column years on the same line - United prints
+  ## "ASSETS 2014 2013" and "LIABILITIES AND STOCKHOLDERS' EQUITY 2014 2013" -
+  ## so the anchored end-of-line form never reached them and neither side of
+  ## its balance sheet had a single findable landmark. Trailing figures are
+  ## allowed; trailing words are not.
+  "|^", S, "?assets", S, "?:?", S, "?[0-9 ,.$()-]*$",
+  "|^", S, "?liabilities(", S, "and", S, W, "equity)?", S, "?:?", S, "?[0-9 ,.$()-]*$",
   ## RESTATEMENT RECONCILIATION COLUMNS. A footnote that reconciles a restated
   ## statement is captioned with the statement's own name and carries its
   ## totals, so it satisfies every structural landmark - Amerisafe's "As
@@ -126,7 +140,61 @@ PAT <- paste0(
   "|as", S, "(previously", S, ")?(reported|adjusted|restated|revised)",
   "|previously", S, "reported",
   "|effect", S, "of", S, W, "(restatement|adjustment|revision|correction)",
+  ## CONSOLIDATING SCHEDULES. A guarantor / non-guarantor note and a Schedule I
+  ## parent-only statement are captioned with the statement's own name and are
+  ## complete statements, so no structural test can reject them - and the
+  ## guarantor note carries all THREE statements next to each other, which
+  ## satisfies the adjacency rule as well. Biomet's 10-K is the case: its
+  ## chosen balance sheet was Note 13's "Biomet, Inc. | Guarantors |
+  ## Non-Guarantors | Eliminations | Total" schedule.
+  ##
+  ## The column captions are the tell. A primary consolidated statement never
+  ## has an eliminations column, and never splits itself by guarantor status.
+  ## This is the same failure as picking the wrong co-registrant, and the
+  ## numbers it yields look right and will foot.
+  "|eliminations?",
+  "|non.?guarantors?|guarantors?",
+  "|condensed", S, "consolidating",
+  "|parent", S, "(company", S, ")?only|parent.only",
+  "|schedule", S, "i+", S, "?[-(]",
   "|(cash", S, "and", S, "(cash", S, "equivalents|due", S, "from)|due", S, "from", S, "banks)",
+  ## THE STATEMENT SEPARATOR, and the page break. Every primary statement is
+  ## followed by a line referring the reader to the notes - Biomet prints "The
+  ## accompanying notes are a part of the consolidated financial statements."
+  ## after each of its four - and in the cleaned text the printed page break
+  ## arrives as a bare "Table of Contents" line. Together these BRACKET the
+  ## statements section explicitly, which is stronger than any window width:
+  ## the statements are the blocks BETWEEN the separators.
+  ##
+  ## Added for 011f, which anchors on the cash flow statement (the one we
+  ## locate most reliably) and then looks for the other two inside that
+  ## section. 011d does not read these and is unaffected.
+  ## Words get between "accompanying" and "notes": United Continental writes
+  ## "The accompanying COMBINED Notes to Consolidated Financial Statements are
+  ## an integral part of these statements.", which an adjacent-words pattern
+  ## misses entirely - so United Airlines, Inc.'s own income statement (no EPS,
+  ## being a wholly-owned subsidiary) had no close marker AND no separator, and
+  ## produced no candidate at all.
+  "|accompanying.{0,30}notes?",
+  "|see", S, "notes?", S, "to",
+  ## The same sentence without the word "notes" in reach. This clause is what
+  ## actually marks the end of a printed statement.
+  "|integral", S, "part", S, "of", S, W, "statements?",
+  "|^", S, "?table", S, "of", S, "contents",
+  ## THE REGISTRANT NAME LINE. A combined filing holds two or more companies'
+  ## statements and WRDS indexes it once per registrant, so the same document
+  ## is drawn as several rows and each row wants ITS OWN company's statements.
+  ## United's 10-K is the case: one accession, two rows -
+  ##   000010/100517/...  United Continental Holdings, Inc.  net income 1,132
+  ##   000031/319687/...  UNITED AIRLINES, INC.              net income 1,114
+  ## and the name is printed on its own line directly above each statement
+  ## title. 4.92% of filing rows since 2002 are combined filings (36,008 of
+  ## 732,299), and this is the one error class whose numbers foot perfectly
+  ## while belonging to the wrong company.
+  ##
+  ## No digits in the character class, or every prose sentence ending in
+  ## "...of the Company." comes back too.
+  "|^", S, "?[a-z .,&'/-]{3,60}(inc|corp|corporation|company|holdings|lp|llc|plc|trust|partners)[.,]?", S, "?$",
   ## SCALE. Without this the chunk cannot be padded up far enough to include the
   ## multiplier, and every extracted number comes out 1,000x or 1,000,000x wrong.
   ## Measured: NONE of four hand-checked chunks contained their scale line, because
