@@ -39,6 +39,16 @@ cat("reading", IN, "\n")
 ## multiply by, so a missing scale yields amount = NA and a flag. Decide what to
 ## do with those as a group rather than silently assuming.
 MULT <- c(ones = 1, thousands = 1e3, millions = 1e6, billions = 1e9)
+## A STATEMENT THAT NAMES NO MULTIPLIER IS IN WHOLE DOLLARS.
+## The comment above says a missing scale yields NA and a flag, pending a
+## decision. Decided 2026-11-19 (Matt), after confirming it against CH Real
+## Estate II's 10-Q, which states no multiplier and prints cash of $32,677.
+## Four of the ten filings in the first in-harness run name no multiplier, all
+## of them small filers, and leaving amount NA drops exactly those from any
+## analysis. The model still reports what the page says, so `scale` stays NA
+## and `scale_assumed_ones` records where this rule was applied - the decision
+## is in the code, visible and reversible, not buried in the extraction.
+MULT_DEFAULT <- 1
 
 STMT <- c(cash_flow = "SCF", income_statement = "IS", balance_sheet = "BS")
 
@@ -69,7 +79,8 @@ one <- function(r) {
 
   sc  <- pick(r, "scale")
   scw <- if (is.null(sc)) NA_character_ else as.character(sc)
-  m   <- if (is.na(scw)) NA_real_ else unname(MULT[scw])
+  m   <- if (is.na(scw)) MULT_DEFAULT else unname(MULT[scw])
+  assumed_ones <- is.na(scw)
 
   ch <- vapply(cols, function(k) as.character(k$h %||% ""), character(1))
   ce <- vapply(cols, function(k) if (is.null(k$end)) NA_character_
@@ -110,6 +121,7 @@ one <- function(r) {
   d <- bind_rows(out)
   d$scale  <- scw
   d$mult   <- m
+  d$scale_assumed_ones <- assumed_ones
   d$amount <- ifelse(d$unscaled_row, d$value_printed, d$value_printed * m)
 
   st <- as.character(pick(r, "statement") %||% NA)
@@ -168,10 +180,28 @@ one <- function(r) {
 ## combinations and so more ties, and a tie leaves the row flagged. That is the
 ## intended behaviour - the resolver declines more often on income statements
 ## rather than guessing more often.
+## A SUBTOTAL PATTERN MUST BE ANCHORED, AND MUST ALLOW PUNCTUATION.
+## Both of these were found the first time the resolver ran on real filings
+## rather than on hand-built tests, which used tidy labels (Matt, 2026-11-19):
+##
+##  1. unanchored, "net cash ... provided ... operating" also matches
+##     "Adjustments to reconcile net earnings to net cash provided by
+##     operating activities:" - a COMPONENT row, and boilerplate in nearly
+##     every indirect-method statement. The section walk then treated that row
+##     as the subtotal, so the operating section was three rows long with a
+##     null subtotal and the resolver bailed out silently.
+##
+##  2. "provided|used" had to follow "net cash " immediately, so Bristol-Myers'
+##     "Net Cash (Used in)/Provided by Investing Activities" matched nothing
+##     and its investing and financing sections were never resolvable.
+##
+## Anchoring to ^net cash fixes the first; allowing parentheses, commas and
+## slashes in between fixes the second. On Bristol-Myers this takes the
+## resolver from 0 of 18 cells placed to 18 of 18, all correct.
 SUBTOT <- list(
-  SCF = c(op  = "net cash (flows? )?(provided|used|from)[a-z ()]*operat",
-          inv = "net cash (flows? )?(provided|used|from)[a-z ()]*invest",
-          fin = "net cash (flows? )?(provided|used|from)[a-z ()]*financ"),
+  SCF = c(op  = "^net cash (flows? )?[a-z (),/]*(provided|used|from)[a-z (),/]*operat",
+          inv = "^net cash (flows? )?[a-z (),/]*(provided|used|from)[a-z (),/]*invest",
+          fin = "^net cash (flows? )?[a-z (),/]*(provided|used|from)[a-z (),/]*financ"),
   ## Each balance-sheet subtotal closes the run of lines above it, exactly as a
   ## cash flow section subtotal does. Ordered as printed so the section walk
   ## assigns each line to the first subtotal at or after it.
@@ -368,7 +398,8 @@ cat(sprintf("unplaced cells: %d  resolved by footing: %d (%.1f%%)  still flagged
 L <- L %>% select(wrdsfname, cik, coname, form, fdate, rdate,
                   statement, stmt_raw, line_order, line_label,
                   col_order, col_heading, period_end, period_months,
-                  value_printed, scale, mult, unscaled_row, amount,
+                  value_printed, scale, mult, scale_assumed_ones,
+                  unscaled_row, amount,
                   col_unplaced, col_placed_by_footing,
                   len_mismatch) %>%
   arrange(wrdsfname, statement, line_order, col_order)
@@ -411,24 +442,36 @@ foot <- L %>%
   group_by(wrdsfname, cik, coname, form, rdate, col_order, period_end,
            period_months, mult) %>%
   summarise(
-    op  = grab(line_label, amount, PAT[["op"]]),
-    inv = grab(line_label, amount, PAT[["inv"]]),
-    fin = grab(line_label, amount, PAT[["fin"]]),
-    fx  = grab(line_label, amount, PAT[["fx"]]),
-    net = grab(line_label, amount, PAT[["net"]]),
-    beg = grab(line_label, amount, PAT[["beg"]]),
-    end = grab(line_label, amount, PAT[["end"]]),
+    ## THE CHECK RUNS ON THE PRINTED FIGURES, NOT ON SCALED DOLLARS.
+    ## Footing is scale-invariant: if the printed numbers add up, so do the
+    ## dollars. Running it on `amount` meant that a filing stating no
+    ## multiplier - where amount is NA by design - could not be tested at all,
+    ## and those are exactly the small filers whose statements most need
+    ## checking. Three of the ten filings in the first in-harness run were
+    ## lost this way, 6 of 18 period-columns (Matt, 2026-11-19).
+    ##
+    ## The dollar values are kept beside them, so a reader still sees the
+    ## section totals in the units the rest of the frame uses.
+    op  = grab(line_label, value_printed, PAT[["op"]]),
+    inv = grab(line_label, value_printed, PAT[["inv"]]),
+    fin = grab(line_label, value_printed, PAT[["fin"]]),
+    fx  = grab(line_label, value_printed, PAT[["fx"]]),
+    net = grab(line_label, value_printed, PAT[["net"]]),
+    beg = grab(line_label, value_printed, PAT[["beg"]]),
+    end = grab(line_label, value_printed, PAT[["end"]]),
+    op_usd  = grab(line_label, amount, PAT[["op"]]),
+    inv_usd = grab(line_label, amount, PAT[["inv"]]),
+    fin_usd = grab(line_label, amount, PAT[["fin"]]),
     n_lines = n(), .groups = "drop") %>%
   mutate(
     sum_sections = rowSums(cbind(op, inv, fin, coalesce(fx, 0)), na.rm = FALSE),
     diff_net     = sum_sections - net,
     diff_roll    = (beg + net) - end,
     ## A tolerance, because a filer computes a subtotal on exact figures and
-    ## then rounds, so rounded components need not sum to the rounded subtotal.
-    ## ONE PRINTED UNIT is the natural tolerance - $1 for a statement in ones,
-    ## but $1,000,000 for one in millions. A flat $1 would fail most of the
-    ## large filers for nothing.
-    tol          = coalesce(mult, 1),
+    ## then rounds, so rounded components need not sum to the rounded
+    ## subtotal. On PRINTED figures that tolerance is one printed unit,
+    ## whatever the statement's scale happens to be.
+    tol          = 1,
     foots_net    = !is.na(diff_net)  & abs(diff_net)  <= tol,
     foots_roll   = !is.na(diff_roll) & abs(diff_roll) <= tol,
     testable_net = !is.na(sum_sections) & !is.na(net),

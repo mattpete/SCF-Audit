@@ -31,8 +31,13 @@
 ## match. Nothing is discarded here - 011f ranks, this ships the whole list.
 suppressMessages({library(DBI); library(RPostgres); library(keyring)
                   library(ssh); library(jsonlite)})
-SP  <- paste0(Sys.getenv("SEC_DATA_PATH"), "/pilot-2026-11/cache/")
-OUT <- paste0(Sys.getenv("SEC_DATA_PATH"), "/pilot-2026-11/extract/")
+## PILOT names the run's cache directory, as in 011b/c/f/h/i. ONLY_N pulls the
+## text for a random N filings instead of all of them, which is what a review
+## sample needs - the full pull is a long remote job for text nobody will read.
+PILOT  <- Sys.getenv("PILOT", "pilot-2026-11")
+ONLY_N <- as.integer(Sys.getenv("ONLY_N", "0"))
+SP  <- paste0(Sys.getenv("SEC_DATA_PATH"), "/", PILOT, "/cache/")
+OUT <- paste0(Sys.getenv("SEC_DATA_PATH"), "/", PILOT, "/extract/")
 dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
 stopifnot(nzchar(Sys.getenv("SEC_DATA_PATH")))
 
@@ -45,6 +50,12 @@ cat("reading", IN, "
 for (cl in c("reg_name","cf_titles_between","sec_lo","sec_hi","form","set","miss"))
   if (!cl %in% names(C)) C[[cl]] <- NA
 cat("candidates:", nrow(C), " filings:", length(unique(C$wrdsfname)), "\n")
+if (ONLY_N > 0) {
+  set.seed(as.integer(Sys.getenv("ONLY_SEED", "20261119")))
+  fs <- sample(unique(C$wrdsfname), min(ONLY_N, length(unique(C$wrdsfname))))
+  C <- C[C$wrdsfname %in% fs, ]
+  cat("ONLY_N set: keeping", length(fs), "filings,", nrow(C), "candidates\n")
+}
 
 ## WHICH CANDIDATES SHIP. Everything that passed the structure test, plus
 ## rank 1 whatever its state - otherwise a slot where nothing passed would be
