@@ -39,67 +39,121 @@ fiscal period appears in up to three filings. The unit of analysis is a
 **pair or triple** of (filing, period) observations, which has not been built
 yet.
 
-### What this folder establishes
+### The five steps, and where each one stands
 
-Step 1 only: that the income statement, balance sheet and statement of cash
-flows can be **located** inside filings held on WRDS Cloud, without EDGAR
-scraping and without XBRL, tightly enough to be affordable to send to an LLM.
+Agreed structure, Matt, 2026-11-19. Scripts are numbered by step.
 
-| | coverage | 10-K | 10-Q | chosen-chunk median lines |
-|---|---|---|---|---|
-| cash flow | 99.8% | 100% | 99.7% | 103 |
-| income statement | 99.2% | 100% | 98.9% | 77 |
-| balance sheet | 99.8% | 100% | 99.7% | 89 |
+| step | what it does | script | state |
+|---|---|---|---|
+| **1** | build the inventory: every filing we could want, with the screens as columns | `010-build-filing-inventory.R` | **built and run.** 913,756 rows, 780,364 filings to fetch |
+| **2** | pull the chunk text off WRDS for the uncollected part of the inventory | `011g` (pull) + `011h`/`011i` (locate) | locating works, 96.6% on a fresh holdout. Not yet wired to the inventory |
+| **3** | turn chunk text into JSON line items — **in harness, not an API** | none; done by hand in a session | run once, on 10 filings. 1,890 rows, 15 of 18 cash flow columns footed |
+| **4** | JSON into a tidy parquet | `012b-build-tidy-frame.R` | built; produced the frame Matt reviewed 2026-11-16 |
+| **5** | compare filings to find revised line items | none yet — **but see below** | not started |
 
-~4,000 input tokens per filing for all three statements. Full-population cost
-~$700 on Haiku with the Batch API. Details below.
+**Step 5 is mostly already written, in the other track.** `Code/001a-extract-scf-lines-and-changes.R`
+holds the original-vs-last-comparative anchoring, the per-line sign resolution,
+the section assignment and the reconciliation gate, and every one of those
+rules exists because a specific filing broke the simpler version. If step 4's
+output is shaped like that script's `scf_lines_parts/`, step 5 is a schema
+mapping rather than a rewrite.
 
-### The next step, unambiguously
+That is reusing the **code**, not merging the **data**. Stitching this track's
+pre-2009 measurements onto the XBRL panel's post-2009 ones would put a
+measurement break in the middle of the panel; this track covers the whole
+2002–2025 period on its own and stands as an independent second measurement.
+Settled 2026-11-19.
 
-**Run the extraction pilot.** It needs an Anthropic API key, which the author
-did not have during this session. Approximately **$1 on Haiku 5.5 for 500
-filings**, and well under a cent for the 60-chunk warm-up.
+### If you are picking this up (Andrew, start here)
 
-Everything needed is now written. In order:
+Three things before anything runs:
 
-```sh
-# 1. pull the chunk text off WRDS Cloud (no API key needed, a few minutes)
-Rscript 011e-export-chunk-text.R
+1. **`.Renviron` at the repo root** needs `SEC_DATA_PATH` (no trailing slash —
+   these scripts build paths with `paste0`) and `SCF_WHO`, which is your name
+   in lower case and decides which filings are yours:
+   ```
+   SEC_DATA_PATH = "C:/Users/<you>/OneDrive - .../SCF Audit/SEC Extraction"
+   SCF_WHO = "andrew"
+   ```
+2. **Run scripts from the repo root**, not from this folder. `.Renviron` lives
+   at the root, so R started here gets an empty `SEC_DATA_PATH` and writes to
+   the root of your C: drive. There is a guard that stops it now.
+3. **WRDS credentials** come from the OS keyring as `keyring::key_get("wrds-user")`
+   and `keyring::key_get("wrds-password")`. Older scripts elsewhere in the repo
+   use `"wrds user"` / `"wrds pw"` with a space; those are wrong.
 
-# 2. project the cost locally, still no API key
-python 012a-extract-statements.py estimate
-python 012a-extract-statements.py estimate --limit 60
+Then:
 
-# 3. the warm-up: 60 chunks, spread across statement and form type
-python 012a-extract-statements.py submit --limit 60
-python 012a-extract-statements.py status      # most batches end within the hour
-python 012a-extract-statements.py fetch       # writes extracted.jsonl + real cost
-
-# 4. read the warm-up, fix the prompt, then the full 1,500
-python 012a-extract-statements.py submit
+```r
+source("011-sec-filing-extraction/010b-inventory-helpers.R")
+inv_progress()                      # who has done what
+b <- inv_todo("collect", n = 250)   # your next batch, nobody else's
 ```
 
-The prompt itself is `prompt/system-prompt.txt` and `prompt/output-schema.json`.
-**Read `prompt/DESIGN.md` before changing either** — it sets out why
-the model transcribes and never interprets, what the output shape is, and the
-five known weaknesses of the prompt as written. Edit those two files, not the
-Python.
+### Two people, one inventory, no collisions
 
-`cache/pick9.rds` already holds the chosen chunk boundaries for all 500 sampled
-filings, and `011e` turns them into `extract/chunks.jsonl`.
+The inventory is on OneDrive, and **two machines writing one parquet produces a
+silent conflict copy** — `filing_inventory-DESKTOP-ABC.parquet` — with no error
+and one person's afternoon gone. So:
 
-It answers two open questions at once:
+- **Nobody writes the inventory.** It is a cached join, rebuilt by re-running
+  `010`.
+- Progress lives in **append-only per-person logs**,
+  `inventory/logs/progress_{SCF_WHO}.csv`. You write only your own file.
+- `010` reads every log it finds and derives `collected` / `extracted` from
+  them. Delete the inventory and rebuild: the logs restore exactly where
+  everyone was.
+- **Filings are assigned by CIK**, not by row, so (a) a firm is never split
+  between two people — step 5 needs all of a firm's filings together — and
+  (b) assignment does not reshuffle when the inventory grows, because it is a
+  function of the CIK and nothing else. Currently 393,026 to matt and 387,338
+  to andrew, in batches of 250.
+- Chunk output follows the same rule: write `chunks_2014_matt_01.parquet`, not
+  into a shared year file. `arrow::open_dataset()` reads a folder as one table.
 
-1. Can a model read the numbers out of these chunks correctly?
-2. Were the chunks right in the first place? If the model reports "there is no
-   cash flow statement here," that is a selection failure — a cleaner signal
-   than any of the structural proxies below.
+### Storage, measured rather than guessed
 
-Do not spend more effort tuning the regexes before running this. Structural
-refinement plateaued; three independent structural measures all land near the
-same place and disagree with each other about *which* chunk is right, and that
-disagreement cannot be resolved without either the model or hand-labelled
-ground truth.
+From the 488-filing holdout, at 37.6 bytes per line (measured on real exported
+chunks, not estimated):
+
+| what ships | lines per filing | per filing | 780,364 filings |
+|---|---|---|---|
+| best block per statement | 679 | 25.6 KB | **18.6 GB** |
+| every candidate block | 1,020 | 38.4 KB | 27.9 GB |
+
+gzip is a measured 32.5% on these files, so **~6 GB stored compressed**.
+
+**Do not store it as 780,000 loose text files.** OneDrive syncs file by file
+and every collaborator downloads all of them; `scf_lines_parts/` in the other
+track is already 451 MB across 85 files and is a known nuisance. Put the chunk
+text in a column in parquet, partitioned by year — about 31,000 filings and
+260 MB per year, 25 files.
+
+Keep a **working folder of loose `.txt`** for the batch you are about to hand
+to a model, though. That is what `holdout-2026-11/extract/chunktext/` is, and
+it is how the step-3 extraction is actually done.
+
+Disk is not the constraint. Those same 679 lines per filing are the tokens
+step 3 pays for, which is where the ~$7,000 full-population figure comes from —
+so shipping every candidate block instead of the best one costs +50% on
+extraction, not just on disk. That is the argument for locator work.
+
+### What this folder established first
+
+That the three statements can be **located** inside filings held on WRDS Cloud,
+without EDGAR scraping and without XBRL, tightly enough to be affordable.
+Measured on a fresh 500-filing holdout drawn to exclude the filings the rules
+were tuned on: **483 covered (96.6%)**, 483 of 488 excluding asset-backed
+trusts (99.0%), 3 genuine misses on ordinary operating companies. The per-statement
+and per-form detail is under "Measured" below.
+
+### The extraction is done in harness, in batches
+
+**Not through the paid Batch API.** Matt's decision, 2026-11-19: the text is
+handed to a model inside a working session, a few hundred filings at a time,
+which also gives a transcription to check the chunks against. The Python
+`012a-extract-statements.py` path and the cost projections below are kept for
+reference, not as the plan.
 
 ### The research-design question nobody has addressed
 
@@ -243,6 +297,106 @@ revisited.
 Population from 2002 onward: **192,510 10-Ks and 532,242 10-Qs** (724,752).
 
 ---
+
+## Step 1: the inventory (`010-build-filing-inventory.R`)
+
+One row per **(accession, registrant CIK)** for every annual and quarterly
+report since 2002, written to `{SEC_DATA_PATH}/inventory/filing_inventory.parquet`.
+Built from two WRDS tables: `wrdssec.wrds_forms` (the filing index) and
+`wrdssec.wrds_forms_reg`, which is one row per registrant per filing and the
+only place the SEC-assigned SIC appears.
+
+| | filings | filers |
+|---|---|---|
+| all annual + quarterly reports, period 2001–2025 | 913,756 | 36,997 |
+| in sample | 799,913 | 24,065 |
+| distinct filings to fetch | **780,364** | |
+
+### Screens are columns, not filters
+
+Every screen lands as a flag plus a `drop_reason` string, and `in_sample` is
+derived from them. The sample definition is **not settled** — whether banks,
+insurers and utilities stay is an open research decision — and a filtered
+inventory would mean re-collecting text every time that decision moved.
+Changing your mind is a one-line edit and a re-run of this script only.
+
+### Four things the index had to settle, not assume
+
+**Small-business forms have no hyphen.** They are `10KSB` and `10QSB`. A form
+list built with `form LIKE '10-%'` silently drops **109,057 filings from ~8,000
+filers**, every one of them between 2002 and 2009 — precisely the pre-XBRL
+window this track exists to reach. `10-K405` and `10KSB40` are also real annual
+reports (the Item 405 delinquency variant, retired in 2003), and transition
+reports `10-KT` / `10-QT` carry real statements for a shortened year, which is
+one of the legitimate reasons comparatives get recast. Deliberately excluded:
+`10-D` (143,330 filings, an asset-backed distribution report), `10-12B`/`10-12G`
+(registration statements), `NT 10-K` (a notice of late filing).
+
+**SIC 6000–6999 is too blunt.** It bundles banks and insurers, which have
+ordinary cash flow statements where classification matters, with entities that
+are not operating companies at all. What is actually in there:
+
+| | filers | filings |
+|---|---|---|
+| **6189 asset-backed trusts** | **9,914** | 24,918 |
+| **6770 blank checks / shells / SPACs** | 3,434 | 33,770 |
+| 6798 REITs | 783 | 31,481 |
+| banks (6021/6022/6035/6036) | 1,612 | 54,959 |
+
+Asset-backed trusts are **27% of the entire filer list** and file a 10-K of
+servicing reports with no financial statements — they are the five of 500
+holdout filings with nothing locatable. Dropped: 6189, 6770, 6798, 6726, 6792,
+6794, 6795, 6799. Kept: banks, insurers, brokers, real-estate operators,
+utilities. Note this is a cleanup, **not a cost lever** — junk filers file twice
+and vanish, so dropping 12,000 of them removes only 11% of filings.
+
+**The filing window and the panel window are different.** `DATE_*` bounds the
+filing date and exists only to bound the pull; `PERIOD_*` bounds the period of
+report and is what the panel actually is. Two measured failures from conflating
+them: bounding only the filing date let 2002-filed amendments of 1986–2000
+periods in, with no original filing in the collection to compare against; and
+cutting the filing date at the end of the panel clipped the annual reports that
+*carry* the last year's statements, which are filed the following spring —
+1,155 annual filings in that year against ~6,600 in a normal one.
+
+Right-edge censoring is a separate problem that narrowing the window does not
+fix. Detecting a revision needs a later filing to re-present the period, so the
+most recent two years can only ever look clean — the same effect the XBRL panel
+flags as `era == "censored right edge"`. Those filings are still collected,
+because they are the comparatives that reveal revisions in earlier periods.
+
+**Accession alone is not unique, and `wrdsfname` does not fix it.** A co-filed
+submission has one index row per registrant: AMERCO and U-Haul International
+share accession `0000004457-04-000004`. 12,963 accessions are affected and one
+appears 67 times. WRDS stores a **separate copy of the text per registrant**
+(`000000/4457/...` and `000000/4458/...`, identical content), so grouping on the
+filename collapses nothing — measured, zero rows. Therefore:
+
+- the status carry-over keys on `(accession, cik)`
+- `collect_primary` dedupes on `accession`, avoiding 19,031 duplicate fetches
+- `collect_primary` must fall on an **in-sample** row. A REIT parent (6798,
+  dropped) co-filing with an operating subsidiary (6500, kept) otherwise makes
+  the dropped registrant primary and the filing is never collected although an
+  in-sample row needs it. That cost 458 filings before the sort was fixed.
+
+**Open problem, not solved:** a co-filed submission contains the statements of
+*both* registrants, so one chunk can hold two income statements. That is the
+International Bancshares / United Airlines case already recorded in `011i`.
+`n_registrant_rows > 1` is the flag for it.
+
+### Verified
+
+- Walmart runs 1 annual + 3 quarterly every year from 2002 to 2023.
+- Akorn is CIK **0000003116**, and all its amendments are present: the Q1 2012
+  10-Q/A, the Q2 2014 10-Q/A, the Q2 and Q3 refilings of April 2015, and the
+  FY2014 10-K/A. The amendment channel is the disclosed channel; losing it
+  would lose half the design. (Checking CIK 1070494 by mistake produced a clean
+  series with no amendments at all and a false alarm — the CIK is worth
+  double-checking before believing a result like that.)
+- `(accession, cik)` is unique; assignment is a pure function of the CIK; no
+  firm is split between two people.
+- A log round trip works: claim ten, log them, rebuild, and the collect queue
+  skips them while the extract queue offers them.
 
 ## READ THIS: the sample is not reproducible
 
@@ -1020,6 +1174,11 @@ with no indication of which year. Footing both resolves and assigns them:
 
 ## Storage
 
+**Now measured, not projected — see *Storage, measured rather than guessed* at
+the top: 18.6 GB raw, ~6 GB compressed for 780,364 filings.** This section's
+reasoning still holds and is kept for the detail.
+
+
 Statement blocks belong in **parquet** — one row per filing × statement with the
 text as a column, partitioned by year — not loose `.txt` files. At full scale
 that is ~2.2 million files; Dropbox sync and `list.files()` both degrade on file
@@ -1039,8 +1198,17 @@ contain restatement language.
 
 ## Keeping this updatable: the ledger
 
-**Designed, not built.** No ledger exists yet. Everything below is the design
-to implement; `012d-build-ledger.R` is the script that would do it.
+**SUPERSEDED, 2026-11-19.** The inventory plus per-person append-only logs
+(`010` / `010b`) does this job, in parquet and CSV that everything else already
+reads, so the separate SQLite ledger below was not built. Two parts of the
+design below still apply and were carried over: status must be recorded per
+filing before extraction scales, not retro-fitted, and a row needs to record
+*which* version of the prompt and locator produced it. The rest is kept for
+the reasoning.
+
+
+Everything below is the original design;
+`012d-build-ledger.R` is the script that would have done it.
 
 ### Why this is needed before scaling
 
@@ -1183,11 +1351,23 @@ step, the letter is the substep, and the letters run in dependency order.**
 
 | step | what it does |
 |---|---|
+| **010** | build the inventory of filings, and track who has collected what |
 | **011** | locate the printed statement inside a filing's text |
 | **012** | turn that text into structured rows |
 
 Validation substeps come last within their step (`011f`, `012c`). Anything that
 is not a step has no number and lives in `diagnostics/`.
+
+### Step 010 — the inventory and the work ledger
+
+| script | runs | does |
+|---|---|---|
+| `010-build-filing-inventory.R` | on demand | queries `wrdssec.wrds_forms` + `wrds_forms_reg` for every annual/quarterly report since 2002; screens as columns; assigns filings to people by CIK; derives collection status from the per-person logs → `inventory/filing_inventory.parquet` |
+| `010b-inventory-helpers.R` | sourced | `inv()`, `inv_todo()`, `inv_log()`, `inv_progress()` — claim a batch and record it without two people writing the same file |
+
+Re-run `010` whenever you want the inventory to reflect the logs. The logs are
+the record; the parquet is a cached join of them, and deleting it loses
+nothing.
 
 ### Step 011 — locate the statement
 
@@ -1328,33 +1508,49 @@ the server.
 
 ---
 
-## Still unstarted
+## Roadmap
 
-In rough order of value:
+Rewritten 2026-11-19, after step 1 was built and the API route was dropped.
+In order of value.
 
-1. **The API pilot.** ~$1, and the scripts for it are written and waiting —
-   see *The next step, unambiguously*. Needs an API key and a Python install.
-   Everything else is downstream of it.
-2. **A definition of revision vs reclassification.** Free, and the item most
-   likely to be expensive if deferred. See above.
-3. **The ledger** (`012d-build-ledger.R`, designed above, not written). Needed
-   before the extraction scales past the pilot, not after — retro-fitting
-   status and version columns onto a dataset already extracted means
-   re-extracting it. Cheap to build now: one SQLite file, one script, no API.
-4. **The pair/triple frame** — SQL join of `wrds_forms` to Compustat on CIK,
-   self-joined on firm × period, to size the project and produce the sampling
-   frame. Offered several times, never started.
-5. **Cross-filing line-item matching.** Harder than extraction, and the
-   place where line order (`n`) earns its cost.
-6. **Restatement reconciliation tables** as a free self-labelling validation
+1. **Wire step 2 to the inventory.** `011g` currently takes a sample frame; it
+   should take `inv_todo("collect")`, write the chunk text to parquet
+   partitioned by year, and call `inv_log()`. That is the only thing standing
+   between the inventory and collection running at scale. Nothing else here is
+   blocked on money or on an API key.
+2. **A definition of revision vs reclassification.** Free to work on now, and
+   the item most likely to be expensive if deferred — see *The research-design
+   question nobody has addressed*. The other track's `001b` already carries a
+   working version of this (five standards, windows set from observed spikes,
+   plus a rule that a disclosed amendment always beats attribution), so this is
+   adaptation rather than invention.
+3. **Step 5, the comparison.** Map step 4's parquet onto the shape of
+   `Code/001a`'s `scf_lines_parts/` and run that script's anchoring logic
+   against it. Reuses the rules that each cost a counter-example to find.
+4. **In-harness extraction at scale**, in batches, logged. Run once on 10
+   filings: 1,890 rows, 15 of 18 cash flow period-columns footed, no failures.
+   The next question is whether accuracy holds on filings nobody hand-checked
+   first.
+5. **Cross-filing line-item matching** — through relabelling, splits and
+   merges. Harder than the extraction, and where line order (`n`) earns its
+   cost. Note the other track's `plabel` work is the same problem.
+6. **The co-registrant problem.** A co-filed submission holds two registrants'
+   statements in one chunk (`n_registrant_rows > 1`, 12,963 accessions). Which
+   set belongs to which CIK is unresolved, and it is the International
+   Bancshares / United Airlines failure in `011i`.
+7. **Restatement reconciliation tables** as a free self-labelling validation
    set — ~6% of blocks contain "previously reported" / "as restated".
-7. **The Audit Analytics baseline** — counts by year, SCF-affecting, Big R vs
-   little r. The denominator the paper's claim is measured against.
-8. **Scale the marker scan to the full population** — ~725k filings, no money,
-   roughly a day of runtime, less on the WRDS grid. Turns a 499-filing sample
-   into a real frame and exposes systematic failures a sample cannot show.
+8. **The Audit Analytics baseline** — counts by year, SCF-affecting, Big R vs
+   little r. The denominator the paper's claim is measured against. Much of
+   this now exists in the other track's `002a`/`002b`.
 9. Fix the 10-Q line-vs-bytes threshold problem.
 10. Implement auditor-report proximity as a filter.
+
+**Dropped:** the paid Batch API pilot. Extraction is done in harness (Matt,
+2026-11-19). `012a-extract-statements.py` and the cost projections are kept for
+reference. Also dropped: the separate `012d-build-ledger.R` SQLite design — the
+inventory plus per-person logs does that job, in the format everything else
+already reads.
 
 ## Working notes
 

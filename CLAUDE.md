@@ -87,6 +87,7 @@ Scope it correctly rather than caveating everything. It affects descriptive *tag
 - Required env vars, set in a local (gitignored) `.Renviron` at the repo root:
   - `DATA_PATH` — processed data folder (parquet outputs, taxonomy/restatement inputs)
   - `SEC_DATA_PATH` — the filing-text extraction work in `011-sec-filing-extraction/` only (see its README). A separate OneDrive folder, deliberately not under `DATA_PATH`, so the two measurement approaches share no storage. **No trailing slash**, and those scripts must build paths with `paste0`, not `file.path`, which strips it.
+  - `SCF_WHO` — `011-sec-filing-extraction/` only. Your name in lower case (`"matt"` / `"andrew"`). Names your progress log and decides which filings are assigned to you, so two people can collect at once without writing the same file.
   - `DROPBOX_PATH`, `XBRL_DATA_PATH` — optional, and only used by `Code/tools/sync-to-onedrive.R` to find the pre-OneDrive copies. Not needed to run the pipeline.
   - These are machine-specific (differ between personal/work computers) and never committed.
 - `Code/000-utilities-functions.R` is sourced by downstream scripts via `source("code/000-utilities-functions.R")` — run scripts from the repo root so this relative path resolves.
@@ -386,35 +387,59 @@ A general-purpose R helper library sourced by other scripts, not specific to any
 
 Started Nov 2026, parallel to everything above and **not** part of the `001`/`002`
 chain. Instead of reading XBRL tags, it pulls the cleaned text of a filing off WRDS
-Cloud, locates the printed statement, and sends that block to the Claude API to
-recover the line items as structured rows. Matt's reason: the XBRL data is too
-messy for this.
+Cloud, locates the printed statement, and reads the line items out of that block
+as structured rows. Matt's reason: the XBRL data is too messy for this.
 
 Two things it gets that the XBRL route cannot. It reaches back to **2002** rather
 than 2009, which is what Audit Analytics coverage and IBES cash flow forecasts
 actually need. And it sees the **printed line item**, not the tag, which is exactly
 the gap recorded as limitation 4 above.
 
+**RESOLVED 2026-11-19: it runs BESIDE the XBRL pipeline as an independent second
+measurement, covering 2002-2025 on its own.** It is not stitched onto the XBRL
+panel at 2009 — that would put a measurement break in the middle of the panel.
+Two methods agreeing is far stronger evidence than either alone, and it is the
+obvious way to settle validation item 1. Reusing `001a`'s comparison *code* is
+fine and intended; merging the *data* is not.
+
 | | |
 |---|---|
 | Code | `011-sec-filing-extraction/` (at the repo root, not under `Code/`) |
 | Data | `SEC_DATA_PATH` — its own OneDrive folder, deliberately separate from `DATA_PATH` |
 | Source | WRDS Cloud filing text. **No EDGAR scraping** — settled, do not revisit |
-| State | locating the statements works (~99% coverage, 2-3 candidate blocks per filing). Extraction is **completely unrun**: no API call has ever been made |
-| Next | the API pilot, ~$1 for 500 filings on Haiku. Needs an API key and a Python install |
-| Full cost | ~$700 for the whole population on Haiku with the Batch API |
+| Extra env var | `SCF_WHO` ("matt" / "andrew") — names your progress log and decides which filings are assigned to you |
+
+**Five steps** (Matt's structure, 2026-11-19). Run scripts **from the repo root**
+so `.Renviron` loads:
+
+| step | script | state |
+|---|---|---|
+| 1 inventory | `010-build-filing-inventory.R` + `010b-inventory-helpers.R` | **built and run.** 913,756 rows, 780,364 filings to fetch, 24,065 filers |
+| 2 pull + locate | `011g` + `011h`/`011i` | locating works: 96.6% on a fresh holdout. Not yet wired to the inventory — **this is the next build** |
+| 3 text → JSON | none; done in harness | run once on 10 filings: 1,890 rows, 15 of 18 cash flow columns footed |
+| 4 JSON → parquet | `012b-build-tidy-frame.R` | built; Matt verified the frame 2026-11-16 |
+| 5 find revisions | none | not started, but mostly `001a` already — map step 4's output onto `scf_lines_parts/` shape |
+
+**Extraction is done IN HARNESS, in batches — not through the paid Batch API.**
+Matt's decision 2026-11-19. Do not propose the API route or quote its cost
+unless asked.
+
+**Two people work this at once, so nobody writes a shared file.** The inventory
+is a cached join, rebuilt by re-running `010`; progress lives in append-only
+per-person logs at `inventory/logs/progress_{SCF_WHO}.csv`. Filings are assigned
+by CIK, so a firm is never split and assignment does not reshuffle as the
+inventory grows. Claim work with `inv_todo()`, record it with `inv_log()`.
+
+Storage, measured: **18.6 GB raw, ~6 GB compressed** for 780,364 filings at 25.6
+KB each. Chunk text goes in parquet partitioned by year, *not* 780k loose files —
+OneDrive syncs per file and every collaborator downloads all of them.
 
 **Read `011-sec-filing-extraction/README.md` before touching any of it.** It holds
-the measured hit rates, the parameter sweeps, the ledger design, the traps that
-pass every structural test (parent-only Schedule I statements, press-release
-exhibits, restatement reconciliations), and the reason the 500-filing sample cannot
-be redrawn. That detail is deliberately kept out of this file, which loads every
-session.
-
-**Unresolved, and it matters for how much of the work above survives:** whether
-this replaces the XBRL pipeline or runs beside it as a second, independent
-measurement. If it runs beside it, two methods agreeing is far stronger evidence
-than either alone, and it is the obvious way to settle validation item 1.
+the measured hit rates, the parameter sweeps, the traps that pass every structural
+test (parent-only Schedule I statements, press-release exhibits, restatement
+reconciliations), the form-list and SIC traps the inventory had to settle, and the
+reason the 500-filing sample cannot be redrawn. That detail is deliberately kept
+out of this file, which loads every session.
 
 ## Current status (as of 2026-10-15)
 

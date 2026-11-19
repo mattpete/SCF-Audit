@@ -248,7 +248,7 @@ d <- d |>
     in_sample = is.na(drop_reason)
   )
 
-## ------------------------------------------------- 5. collection status cols
+## ------------------------------------------------- 5. one row per filing to fetch
 ## Initialised empty; step 2 writes these back. Kept on every row, including
 ## out-of-sample ones, so that widening the sample later does not need a
 ## schema change.
@@ -272,7 +272,14 @@ d <- d |>
 ## statements. That is the International Bancshares / United Airlines case
 ## already recorded in 011i -- picking which set belongs to which CIK is an
 ## extraction problem, and `n_registrant_rows > 1` is the flag for it.
+## THE PRIMARY ROW MUST BE AN IN-SAMPLE ONE. A co-filed submission can have
+## one registrant we keep and one we drop -- a REIT parent (6798, dropped)
+## filing with an operating subsidiary (6500, kept) is the common shape. If
+## the dropped registrant happens to sort first it becomes the primary, and
+## the filing is then never collected although an in-sample row needs it.
+## Measured: 24 filings behaved that way before this `arrange` was added.
 d <- d |>
+  arrange(accession, desc(in_sample), cik) |>
   group_by(accession) |>
   mutate(
     n_registrant_rows = dplyr::n(),
@@ -280,48 +287,76 @@ d <- d |>
   ) |>
   ungroup()
 
+## -------------------------------------------------- 6. who works on what
+## ASSIGNED BY CIK, NOT BY FILING. Two reasons:
+##
+## 1. Step 5 compares a firm's filings against each other, so a firm split
+##    across two people is half-done until both finish. Whole firms keep each
+##    person's slice self-contained.
+## 2. It must be STABLE as the inventory grows. Assigning by row number would
+##    reshuffle everyone's queue the moment a form or a year is added, so
+##    assignment is a function of the CIK itself and nothing else.
+##
+## Each person sets SCF_WHO in their own .Renviron (machine-specific, never
+## committed), the same way DATA_PATH and SEC_DATA_PATH work:
+##     SCF_WHO = "matt"
+PEOPLE <- c("matt", "andrew")
+BATCH_N <- 250    ## filings per batch -- a sitting's worth of in-harness work
+
 d <- d |>
   mutate(
-    collected      = FALSE,          ## has the chunk text been pulled?
-    collect_date   = as.Date(NA),
-    locate_how     = NA_character_,  ## 011i's reason: header cut or window
-    n_blocks       = NA_integer_,    ## statements found in the chunk
-    extracted      = FALSE,          ## step 3: turned into JSON?
-    extract_date   = as.Date(NA)
-  )
+    assigned_to = PEOPLE[(as.integer(cik) %% length(PEOPLE)) + 1]
+  ) |>
+  arrange(assigned_to, cik, period_end, fdate) |>
+  group_by(assigned_to) |>
+  mutate(batch = ((dplyr::row_number() - 1) %/% BATCH_N) + 1) |>
+  ungroup()
 
-## ------------------------------------------- 6. preserve status on a re-run
-## THE POINT OF THIS SECTION. Re-running after a config change must not throw
-## away collection work. Status is carried over by (accession, cik).
-## ACCESSION ALONE IS NOT UNIQUE: a co-registrant filing has one index row
-## per registrant (AMERCO and U-Haul International share one). Rows added
-## or dropped by a changed form list or SIC list do not disturb the rest.
+## ------------------------------------------------- 7. status, from the logs
+## NOBODY WRITES THIS FILE. Status is DERIVED from append-only per-person
+## logs, so two people working at once cannot collide.
+##
+## WHY. The inventory lives on OneDrive. Two machines updating one parquet
+## produces a silent conflict copy -- `filing_inventory-DESKTOP-ABC.parquet`
+## -- and one person's afternoon disappears with no error. A file that nobody
+## writes cannot do that. So step 2 and step 3 append a row to
+## `inventory/logs/progress_{SCF_WHO}.csv`, each person touching only their
+## own file, and this script reads whatever logs it finds and joins them on.
+##
+## It also means status is rebuildable: delete the inventory, re-run, and the
+## logs restore exactly where everyone was.
+LOG_DIR <- paste0(OUT_DIR, "/logs")
+dir.create(LOG_DIR, showWarnings = FALSE, recursive = TRUE)
 
-if (file.exists(OUT)) {
-  prev <- read_parquet(OUT) |>
-    select(accession, cik, collected, collect_date, locate_how, n_blocks,
-           extracted, extract_date)
-  cat("existing inventory found:", format(nrow(prev), big.mark = ","),
-      "rows,", sum(prev$collected), "already collected -- carrying status over\n")
+logs <- list.files(LOG_DIR, pattern = "^progress_.*\\.csv$", full.names = TRUE)
+if (length(logs)) {
+  lg <- dplyr::bind_rows(lapply(logs, function(p)
+    readr::read_csv(p, show_col_types = FALSE, progress = FALSE)))
+  cat("logs read:", length(logs), "file(s),", format(nrow(lg), big.mark = ","),
+      "entries from", paste(sort(unique(lg$who)), collapse = ", "), "\n")
+  ## Last entry wins per (accession, cik, stage) -- a re-collected filing
+  ## supersedes its earlier entry rather than duplicating it.
+  lg <- lg |> arrange(when) |>
+    group_by(accession, cik, stage) |> slice_tail(n = 1) |> ungroup()
+  coll <- lg |> filter(stage == "collected") |>
+    select(accession, cik, collect_date = when, locate_how, n_blocks)
+  extr <- lg |> filter(stage == "extracted") |>
+    select(accession, cik, extract_date = when)
   d <- d |>
-    select(-collected, -collect_date, -locate_how, -n_blocks,
-           -extracted, -extract_date) |>
-    left_join(prev, by = c("accession", "cik")) |>
-    mutate(
-      collected = dplyr::coalesce(collected, FALSE),
-      extracted = dplyr::coalesce(extracted, FALSE))
-  carried <- sum(d$collected)
-  cat("  carried over:", format(carried, big.mark = ","), "collected rows\n")
-  lost <- nrow(prev[prev$collected, ]) - carried
-  if (lost > 0) cat("  WARNING:", lost,
-    "collected rows are no longer in the inventory (form or date list narrowed)\n")
+    left_join(coll, by = c("accession", "cik")) |>
+    left_join(extr, by = c("accession", "cik")) |>
+    mutate(collected = !is.na(collect_date), extracted = !is.na(extract_date))
+} else {
+  cat("no progress logs yet -- everything is uncollected\n")
+  d <- d |> mutate(
+    collect_date = as.Date(NA), locate_how = NA_character_,
+    n_blocks = NA_integer_, extract_date = as.Date(NA),
+    collected = FALSE, extracted = FALSE)
 }
-
-d <- d |> arrange(cik, period_end, fdate)
 write_parquet(d, OUT)
 cat("\nwritten:", OUT, "\n")
 
-## ------------------------------------------------------------- 7. summary
+## ------------------------------------------------------------- 8. summary
 ## Printed every run, because these are the numbers that decide the budget.
 
 cat("\n================ INVENTORY ================\n")
