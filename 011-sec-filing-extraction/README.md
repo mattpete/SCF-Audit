@@ -654,6 +654,59 @@ Run selection now asks, in order: does the run **hold** the anchor; how many
 **different** statements are in it; does it hold a cash flow statement at all;
 and only then, how near is it.
 
+### A header with no period line still ends the block above it, 2026-11-19
+
+The gates above decide whether a title is a header. But "is this a header" was
+answering two different questions at once, and they need different answers:
+
+- **ship this block?** — strict. All three gates.
+- **does a block END here, and does the section CONTINUE?** — lenient. A title
+  that fails the period and figures tests is still page furniture, and it still
+  occupies the space between two statements.
+
+**World Wrestling Entertainment's** FY2015 10-K is the case. Its equity
+statement header reads
+
+```
+6059  table of contents
+6061  world wrestling entertainment, inc.
+6063  consolidated statements of stockholders equity
+6065  (in thousands, except per share data)
+```
+
+— four of the six header elements, and no period line anywhere near it, because
+an equity statement's columns are **accounts** (Shares, Amount, Capital), not
+periods. Discarding it left a 616-line gap, sixteen lines over `RUN_GAP`, which
+stranded the cash flow header in a run of one and lost the statement. The
+mechanism is not rare: **128 of 488 holdout filings (26.2%)** have an equity
+title rejected for want of a period line, and 119 (24.4%) show the full WWE
+pattern.
+
+A **soft header** is a title that fails the period gate but carries the
+surrounding page furniture — a company name just above, a scale just below, or
+a page/contents marker above, two of the three. It is never shipped as a block.
+It does two things only: a gap containing one does not end the run, and a block
+above one ends there.
+
+Two things that look like simplifications and are not:
+
+- **Just widening `RUN_GAP`** was tried first. Runs merged, nothing new cut the
+  blocks apart, and ten filings fell off tight blocks onto 6,000-token windows
+  for no gain in coverage. The joining half alone is worse than neither half.
+- **Requiring figures under a soft header** was in the first build and is why
+  it did not fix WWE. An equity statement is a *wide* table, so its header band
+  runs forty lines of one word each — Class A, Paid-in, Comprehensive, Shares,
+  Amount, Capital, Deficit, Total — before the first number. It fails the
+  figures test for the same reason it fails the period test. The furniture test
+  carries it alone; Kibush's notes prose ("balance sheet dates. items in the
+  income statement and cash flow statement") has no furniture and stays out.
+
+Measured on the holdout: coverage unchanged at 483, **tight blocks 402 → 411**,
+windows 81 → 72. On the tuned sample all three went 426 → 432. It also fixed
+one of the five hand-validated cases — **EPIQ Systems**' income statement now
+comes out at 245–485 against a hand-verified 257–478, where it had been
+reporting a footnote table at 1292–1315 since approach A.
+
 ### A filing is never shipped short
 
 Every 10-K and 10-Q contains all three statements, so a filing missing one here
@@ -679,7 +732,7 @@ filing prints no separate one** — Payoneer Q2 2021 prints just "Condensed
 Consolidated Statements of Comprehensive Loss", while International Bancshares
 prints both and conflating them is what made B pick the wrong one.
 
-### Measured, 2026-11-18
+### Measured, 2026-11-19
 
 Denominator is the full 500-filing sample in each column, **not** the filings
 the locator returned something for. A filing that came back empty is a miss.
@@ -688,12 +741,20 @@ the locator returned something for. A filing that came back empty is a miss.
 |---|---|---|
 | covered: all three cut, or in a window | 490 (98.0%) | **483 (96.6%)** |
 | excluding asset-backed trusts | — | **483 of 488 (99.0%)** |
+| all three cut as tight blocks | 432 (86.4%) | **411 (82.2%)** |
+| shipped as a window instead | 58 | 72 |
 | genuine misses on ordinary operating companies | — | **3 of 500** |
 
 **The holdout is the number to trust.** Every fix above was derived from a
 filing inside the original 500, and six of the eleven cases sit in the half
 that was meant to be held out, so that sample's figure is fitted. `011j` draws
 a fresh 500 excluding the original one; see "Running a second sample" below.
+
+**Coverage is no longer the thing header work moves.** It has come back exactly
+483 under four different variants of the header logic, because the window
+backstop absorbs whatever the headers fail to cut. Further tuning changes
+*which* filings get a tight block, and therefore cost — not how many filings
+are usable.
 
 The three real misses are Churchill Downs Q1 2007 (no income statement title
 anywhere), Provident Bankshares Q1 2002 (no balance sheet title) and one other.

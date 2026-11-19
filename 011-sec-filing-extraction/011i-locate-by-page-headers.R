@@ -115,6 +115,12 @@ HDR_DEDUP <- 8
 ## apart than this. A statement page is 50-250 lines; 600 allows for an audit
 ## report or an equity statement sitting between two of them.
 RUN_GAP <- 600
+## SOFT HEADERS: how close the page furniture must sit to a title for it to
+## count as a header despite having no period line under it, and how many of
+## the three kinds it needs. Two of three keeps notes prose out; WWE's equity
+## header has all three (contents marker, company name, scale).
+SOFT_NEAR <- 3
+SOFT_FURN <- 2
 ## A run must hold at least this many headers to be the statements section.
 ## Two is enough: a 10-Q can print the balance sheet and cash flow statement
 ## with the income statement combined into another.
@@ -340,7 +346,64 @@ locate <- function(x) {
   ## 3912; United's filing holds two registrants, so the earliest set is the
   ## holding company's and the row we are processing is the subsidiary's.
   A <- ANCH[[f]]
-  H$run <- cumsum(c(1, diff(H$line) > RUN_GAP))
+
+  ## ---- SOFT HEADERS -------------------------------------------------------
+  ## A title that fails ONLY the period test is still a page header, and it
+  ## still has two jobs to do even though we will not ship it as a block:
+  ## it ENDS the block above it, and it keeps the statements section together
+  ## across the space it occupies.
+  ##
+  ## WWE's 10-K is the case. Its equity statement header reads
+  ##
+  ##   6059  table of contents
+  ##   6061  world wrestling entertainment, inc.
+  ##   6063  consolidated statements of stockholders equity
+  ##   6065  (in thousands, except per share data)
+  ##
+  ## - four of the six header elements, and no period line anywhere near it,
+  ## because an equity statement's columns are ACCOUNTS (Shares, Amount,
+  ## Capital), not periods. Discarding it entirely left a 616-line gap, which
+  ## exceeded RUN_GAP by sixteen, which stranded the cash flow header in a run
+  ## of one and lost the statement. 128 of 488 holdout filings (26.2%) have an
+  ## equity title rejected this way (Matt, 2026-11-19).
+  ##
+  ## WHY NOT JUST DROP RUN_GAP. Tried first: runs merged, nothing new cut the
+  ## blocks apart, and ten filings fell off tight blocks onto 6,000-token
+  ## windows for no gain in coverage. Soft headers cut as well as join, which
+  ## is the half that attempt was missing.
+  ##
+  ## THE FURNITURE TEST is what keeps prose out. A soft header must carry the
+  ## surrounding page furniture - a company name just above, a scale just
+  ## below, or a page/contents marker above. Kibush's notes contain "balance
+  ## sheet dates. items in the income statement and cash flow statement",
+  ## which has none of it and stays excluded.
+  cname <- x$line[x$coname]; scal <- x$line[x$scale]
+  pmark <- sort(unique(c(x$line[x$toc], x$line[x$item_hd])))
+  ## NO FIGURES REQUIREMENT HERE, and the reason is the same statement again.
+  ## An equity statement is a WIDE table, so its header band runs forty lines
+  ## of one word each - Class A, Class B, Paid-in, Comprehensive, Shares,
+  ## Amount, Capital, Deficit, Total - before the first number. WWE's fails
+  ## the figures test for exactly the reason it fails the period test, and
+  ## requiring figures here meant the soft set never contained it at all.
+  ## The furniture test below is what keeps prose out; it does not need help.
+  soft <- tl[!tl$hdr & !tl$crowd, ]
+  if (nrow(soft)) {
+    furn <- vapply(soft$line, function(L)
+      any(cname >= L - SOFT_NEAR & cname < L) +
+      any(scal  >  L & scal  <= L + SOFT_NEAR) +
+      any(pmark >= L - SOFT_NEAR * 2 & pmark < L) >= SOFT_FURN, logical(1))
+    soft <- soft[furn, ]
+  }
+  ## Never let a soft header sit on top of a real one.
+  if (nrow(soft)) soft <- soft[vapply(soft$line, function(L)
+    !any(abs(H$line - L) <= HDR_DEDUP), logical(1)), ]
+
+  H$run <- cumsum(c(1, vapply(seq_len(nrow(H))[-1], function(i) {
+    g <- H$line[i] - H$line[i - 1]
+    if (g <= RUN_GAP) return(FALSE)
+    ## a soft header inside the gap means the section did not end there
+    !any(soft$line > H$line[i - 1] & soft$line < H$line[i])
+  }, logical(1))))
   rs <- split(H, H$run)
   ## Only runs big enough to BE a statements section are eligible. Choosing
   ## the nearest run without this test cost 88 filings, because a lone header
@@ -396,7 +459,18 @@ locate <- function(x) {
   ## 5. each block runs from its header to the next block's header.
   ##    The last block in the run stops at the notes section if one follows,
   ##    else at the run's end plus one page.
-  nh <- c(blocks$hdr[-1], NA)
+  ## A SOFT HEADER ALSO ENDS THE BLOCK ABOVE IT. Without this the balance
+  ## sheet block would run through the equity statement to the cash flow
+  ## header - covered, but 600 lines instead of 235, which is the merging that
+  ## sank the first attempt at this.
+  sl <- if (exists("soft") && nrow(soft)) soft$line[
+    soft$line > min(blocks$hdr) & soft$line <= max(blocks$hdr) + MAXLEN] else numeric(0)
+  nh <- vapply(seq_len(nrow(blocks)), function(i) {
+    cands <- c(if (i < nrow(blocks)) blocks$hdr[i + 1] else NA_real_,
+               sl[sl > blocks$hdr[i] + MINLEN])
+    cands <- cands[!is.na(cands)]
+    if (!length(cands)) NA_real_ else min(cands)
+  }, numeric(1))
   nt <- x$line[x$notes_hd]; nt <- nt[nt > max(blocks$hdr)]
   tail_end <- if (length(nt)) min(nt) else min(max(blocks$hdr) + 300, nl)
   out <- data.frame()
