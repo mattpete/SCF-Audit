@@ -58,3 +58,9 @@ vignettes/*.pdf
 
 # the output folder
 /out/*
+# data and intermediate objects -- these live under the .Renviron paths,
+# never in the repo. *.rda was already here; the pipeline writes .rds and
+# .parquet, and the extraction track writes .jsonl.
+*.rds
+*.parquet
+*.jsonl
