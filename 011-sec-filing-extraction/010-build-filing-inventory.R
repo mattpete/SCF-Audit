@@ -48,17 +48,29 @@ OUT_DIR <- paste0(SEC, "/inventory")
 ## TWO DATE WINDOWS, AND THEY ARE NOT THE SAME THING.
 ##
 ## DATE_* bounds the FILING date and exists only to bound the pull. It runs a
-## year past the panel on purpose: an FY2023 10-K is filed in early 2024, so
-## cutting the query at 2023-12-31 left only 1,155 annual filings with a 2023
-## period against ~6,600 in a normal year. That is not censoring, it is the
-## query clipping the filings that carry the last year's statements.
+## year past the panel on purpose, because an annual report is filed the
+## spring after the year it covers. Measured on the first run, 2026-11-19:
+## with DATE_MAX at 2023-12-31 the last year of the panel held 1,155 annual
+## filings against ~6,600 in a normal year. That was not censoring, it was
+## the query clipping the filings that carry the last year's statements.
 ##
 ## PERIOD_* bounds the period of report, which is what the panel actually is,
 ## and it is applied as a FLAG (see Section 4), not a filter.
 DATE_MIN   <- "2002-01-01"
-DATE_MAX   <- "2024-12-31"
+DATE_MAX   <- "2026-12-31"
 PERIOD_MIN <- "2001-01-01"
-PERIOD_MAX <- "2023-12-31"
+PERIOD_MAX <- "2025-12-31"
+## PERIOD_MAX stops at the last COMPLETE fiscal year in the index (which runs
+## to 2026-11). DATE_MAX runs a year beyond it so the annual reports for that
+## year, filed the following spring, are in the pull.
+##
+## RIGHT-EDGE CENSORING IS A SEPARATE ISSUE and is not handled by narrowing
+## this. Detecting a revision needs a LATER filing that re-presents the
+## period, so the most recent two years can only ever look clean -- the same
+## effect the XBRL panel flags as `era == "censored right edge"`. Those
+## filings are still collected, because they are the comparatives that reveal
+## revisions in EARLIER periods. Flag the right edge at analysis; do not drop
+## it here.
 ## 2002 is where Audit Analytics coverage and I/B/E/S cash flow forecasts
 ## begin, which is the whole reason this track exists.
 ##
