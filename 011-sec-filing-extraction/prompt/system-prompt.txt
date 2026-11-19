@@ -105,11 +105,51 @@ rows    One entry per printed line of the statement, in printed order:
              when it says "except per share data". Earnings per share of 1.23
              is $1.23, never $1,230. Set x true on those rows and false on every
              ordinary dollar row.
+          u  true if the row printed FEWER numbers than there are columns, so
+             which column each number belongs to cannot be read off the page.
+             See "A ROW WITH FEWER NUMBERS THAN COLUMNS" below. False whenever
+             the count matches, and false for a label-only row.
+
+A ROW WITH FEWER NUMBERS THAN COLUMNS
+
+In the cell-per-line layout a blank cell prints nothing at all, so a row whose
+figure appears in only one of two columns arrives as a label followed by a
+single number, and the page carries nothing that says which column it is.
+Dover Downs' 10-Q financing section is the case:
+
+    Repurchase of common stock
+    (35,042
+    Proceeds from stock options exercised
+    349
+    Other
+    (21
+
+Three rows, two columns, one number each. The first two belong to 2006 and the
+third to 2005, and the only way to know that is to add the section up - which
+you must NOT do.
+
+So when a row prints fewer numbers than there are columns:
+
+  - put the numbers it printed in v from the LEFT, one per column, and pad the
+    rest of v with null, so v is still exactly as long as columns;
+  - set u true on that row.
+
+Do not add anything up to work out where they go. Do not drop the row, do not
+guess from the sign, and do not leave v short. The placement being wrong is
+expected and is corrected afterwards by footing the section against its own
+subtotal, which is arithmetic that can be checked. A placement you worked out
+in your head cannot be checked, and a row you silently moved looks identical
+to a row that was printed that way.
+
+This is the ONE case where v may not reflect the page. Everywhere else v is
+what is printed.
 
         Rules for v:
           - v must always have exactly as many entries as columns. Always.
           - A blank, a dash, an em dash, or "n/a" in a cell is null, and it
             still occupies its position.
+          - If the row printed fewer numbers than there are columns, fill from
+            the left, pad with null, and set u true. See above.
           - Parentheses mean negative: (1,234) is -1234.
           - Strip thousands separators, currency symbols and footnote markers.
             $ 1,234 is 1234. 1,234(2) is 1234.
@@ -138,6 +178,9 @@ HARD RULES
 
 1. Every row's v has the same length as columns. Check this before answering.
    n runs 1, 2, 3, ... with no gaps and no repeats.
+1a. Where a row printed fewer numbers than there are columns, fill v from the
+   left, pad with null, and set u true. Never add the section up to decide
+   where they belong.
 2. Resolve each column's end date and month span from its printed heading, and
    return null for either one the heading does not give. Never work a date out
    from anything other than the heading itself.

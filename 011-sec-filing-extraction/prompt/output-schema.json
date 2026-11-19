@@ -54,7 +54,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["n", "l", "v", "x"],
+        "required": ["n", "l", "v", "x", "u"],
         "properties": {
           "n": {
             "type": "integer",
@@ -74,6 +74,10 @@
           "x": {
             "type": "boolean",
             "description": "True if this row's numbers are NOT in the statement's scale (per-share amounts, share counts, par value, ratios, percentages). False for ordinary dollar rows."
+          },
+          "u": {
+            "type": "boolean",
+            "description": "True if the row printed FEWER numbers than there are columns, so which column each one belongs to cannot be read off the page. The numbers were placed left to right as a default and the placement is unverified. False whenever the count matches the number of columns, and false for a row with no numbers at all."
           }
         }
       }

@@ -90,6 +90,10 @@ one <- function(r) {
                    numeric(1))
     ## per-share / share-count / ratio rows are printed unscaled already
     noscale <- isTRUE(rr$x)
+    ## `u` - the row printed fewer numbers than there are columns, so the model
+    ## filled v from the left and the placement is unverified. Resolved below
+    ## by footing, never by the model. See resolve_unplaced().
+    unres <- isTRUE(rr$u)
     out[[i]] <- data.frame(
       line_order    = as.integer(rr$n %||% i),
       line_label    = as.character(rr$l %||% ""),
@@ -100,6 +104,7 @@ one <- function(r) {
       value_printed = vals,
       unscaled_row  = noscale,
       len_mismatch  = bad,
+      col_unplaced  = unres,
       stringsAsFactors = FALSE)
   }
   d <- bind_rows(out)
@@ -121,6 +126,216 @@ one <- function(r) {
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
+## ---- PLACE THE UNPLACED VALUES BY FOOTING ---------------------------------
+## In the cell-per-line layout a blank cell prints nothing, so a row whose
+## figure appears in only one of two columns arrives as a label and a single
+## number with nothing on the page saying which column it is. Dover Downs'
+## 10-Q financing section is the case:
+##
+##     Repurchase of common stock            (35,042
+##     Proceeds from stock options exercised     349
+##     Other                                     (21
+##
+## Three rows, two columns, one number each. The first two are 2006 and the
+## third is 2005, and the only evidence for that is the section's own
+## subtotal: 147,325 - 115,300 - 2,591 - 35,042 + 349 + 50 = -5,209, which is
+## what the statement prints, and the 2005 column only reaches -7,190 if the
+## (21) goes there.
+##
+## The model is forbidden to do that sum - it marks the row `u` and fills from
+## the left. The arithmetic happens here, where it can be read and checked.
+## For every assignment of the printed values to columns that keeps their
+## left-to-right order, the section is footed against its own subtotal; if
+## exactly one assignment foots, it is taken. If none or several do, the
+## values stay where the model put them and the rows stay flagged, because a
+## guess that cannot be checked is worse than a flag that can.
+## THE SUBTOTALS EACH STATEMENT FOOTS TO.
+##
+## Cash flow and balance sheet both work the same way - the lines above a
+## subtotal SUM to it, with the printed sign being the arithmetic sign. So the
+## same resolver serves both; only the labels differ.
+##
+## THE INCOME STATEMENT NEEDS A SIGN FOR EVERY LINE AS WELL. Its expenses are
+## printed POSITIVE and subtracted - Biomet prints net sales 2,698.0, cost of
+## sales 819.9 and gross profit 1,878.1 - so the components do not sum to the
+## subtotal, they NET to it, and the page does not say which lines are added.
+## But each line is either added or subtracted, so the sign is one bit per
+## line and can be solved for alongside the placement (Matt, 2026-11-17).
+##
+## The protection is the same in all three cases and it is the uniqueness
+## requirement, not the statement type: a placement is taken only when exactly
+## one combination foots every column. Searching signs as well means more
+## combinations and so more ties, and a tie leaves the row flagged. That is the
+## intended behaviour - the resolver declines more often on income statements
+## rather than guessing more often.
+SUBTOT <- list(
+  SCF = c(op  = "net cash (flows? )?(provided|used|from)[a-z ()]*operat",
+          inv = "net cash (flows? )?(provided|used|from)[a-z ()]*invest",
+          fin = "net cash (flows? )?(provided|used|from)[a-z ()]*financ"),
+  ## Each balance-sheet subtotal closes the run of lines above it, exactly as a
+  ## cash flow section subtotal does. Ordered as printed so the section walk
+  ## assigns each line to the first subtotal at or after it.
+  BS  = c(tca = "^total current assets",
+          ta  = "^total assets",
+          tcl = "^total current liabilities",
+          tl  = "^total liabilities$|^total liabilities[^a]",
+          teq = "^total (share|stock)holders.? (equity|deficit)|^total equity",
+          tle = "^total liabilities and"),
+  IS  = c(trev = "^(total|net) (revenues?|sales)",
+          gp   = "^gross (profit|margin)",
+          toe  = "^total (operating |costs? and )?(costs?|expenses?)",
+          oi   = "^(total )?operating (income|loss|profit)",
+          pbt  = "^(income|loss|earnings).{0,30}before.{0,20}tax",
+          ni   = "^net (income|loss|earnings)"))
+## Which statements need a sign solved per line as well as a placement.
+SIGNED <- c(SCF = FALSE, BS = FALSE, IS = TRUE)
+FOOT_TOL <- 1       # printed units, so $1k in a thousands statement
+## Refuse to search beyond this many combinations. Signs double the space per
+## component line, so an income-statement block of more than about ten lines
+## is declined rather than searched - and a block that big is also the one
+## where a tie is most likely anyway.
+MAX_COMB <- 20000
+
+resolve_unplaced <- function(d, stmt) {
+  if (!any(d$col_unplaced)) return(d)
+  SB <- SUBTOT[[stmt]]
+  if (is.null(SB)) return(d)
+  nc <- max(d$col_order)
+  if (nc < 2) return(d)
+  w <- d[order(d$line_order, d$col_order), ]
+  ord <- unique(w$line_order)
+  lab <- tolower(trimws(w$line_label[match(ord, w$line_order)]))
+  ## section boundaries: a subtotal closes its own section, so each line takes
+  ## the first subtotal at or after it. Same rule as 001a uses on the XBRL side.
+  sub <- rep(NA_character_, length(ord))
+  for (k in names(SB)) sub[grepl(SB[[k]], lab)] <- k
+  sec <- rep(NA_character_, length(ord))
+  nxt <- NA_character_
+  for (i in rev(seq_along(ord))) {
+    if (!is.na(sub[i])) nxt <- sub[i]
+    sec[i] <- nxt
+  }
+  for (k in names(SB)) {
+    si <- which(sec == k & is.na(sub))                     # components
+    ti <- which(sec == k & !is.na(sub))                     # the subtotal
+    if (!length(ti) || !length(si)) next
+    tot <- w$value_printed[w$line_order == ord[ti[1]]]
+    if (any(is.na(tot))) next
+    amb <- si[vapply(si, function(i)
+      any(w$col_unplaced[w$line_order == ord[i]]), logical(1))]
+    if (!length(amb)) next
+    fix <- setdiff(si, amb)
+    ## Where the subtotal is a running one rather than a sum of the block, the
+    ## block starts from the PREVIOUS subtotal, not from zero. An income
+    ## statement's "Operating income" follows "Gross profit"; a balance sheet's
+    ## "Total assets" follows "Total current assets". Taking the nearest
+    ## subtotal above the block as the opening balance covers both, and for a
+    ## block with nothing above it the opening balance is zero.
+    pv <- rep(0, nc)
+    above <- which(!is.na(sub) & seq_along(ord) < min(si))
+    if (isTRUE(SIGNED[[stmt]]) && length(above)) {
+      p <- w$value_printed[w$line_order == ord[max(above)]]
+      if (!any(is.na(p))) pv <- p
+    }
+    sgn <- isTRUE(SIGNED[[stmt]])
+    ## FIXED lines: known values, unknown signs only where the statement nets.
+    fv <- lapply(fix, function(i) {
+      v <- w$value_printed[w$line_order == ord[i]]
+      ifelse(is.na(v), 0, v)
+    })
+    ## AMBIGUOUS lines: the printed values, to be placed in some increasing
+    ## choice of columns, with a sign each where the statement nets.
+    vals <- lapply(amb, function(i) {
+      v <- w$value_printed[w$line_order == ord[i]]
+      v[!is.na(v)]
+    })
+    opts <- lapply(vals, function(v) combn(nc, length(v), simplify = FALSE))
+
+    ## ---- STEP 1: PIN THE SIGNS ON THE CLEAN COLUMNS --------------------
+    ## A line's sign is the same in every column, and most columns have no
+    ## missing value at all - Biomet's four-column income statement has two
+    ## clean ones. Those columns determine the signs on their own:
+    ##
+    ##   col 1:  1,878.1 - 1,042.3 - 106.6 - 372.6 = 356.6
+    ##   col 4:    146.5 -   194.2 -  34.0 -   0.5 = -82.2
+    ##
+    ## and no other sign pattern satisfies both. So the signs come out of the
+    ## clean columns rather than out of a search over the whole block, which
+    ## is what made the brute-force cap bind (Matt, 2026-11-17).
+    ##
+    ## The convention is tried first and almost always holds: within a block
+    ## closed by a running subtotal the components SUBTRACT, and within one
+    ## closed by a "total X" they ADD. Only if neither verifies does this fall
+    ## back to enumerating sign patterns, and only then does the cap apply.
+    ## Which columns are clean is not known in advance - any column could be
+    ## the one a missing value belongs to. But a clean column is exactly a
+    ## column the FIXED lines already foot, so the right sign vector is the one
+    ## that foots the most columns on the fixed lines alone, and the columns it
+    ## misses are the ones awaiting a missing value.
+    sv_for <- function(sv) {
+      b <- pv
+      for (q in seq_along(fix)) b <- b + sv[q] * fv[[q]]
+      b
+    }
+    nf <- length(fix)
+    cand <- if (!sgn) list(rep(1, nf)) else {
+      cc <- list(rep(-1, nf), rep(1, nf))        # the convention, both ways
+      ok <- vapply(cc, function(sv) sum(abs(sv_for(sv) - tot) <= FOOT_TOL) > 0, logical(1))
+      if (any(ok)) cc[ok] else {
+        if (2^nf > MAX_COMB) list() else
+          lapply(seq_len(2^nf) - 1, function(z)
+            ifelse(bitwAnd(bitwShiftR(z, seq_len(nf) - 1), 1L) == 1L, 1, -1))
+      }
+    }
+    if (!length(cand)) next
+    ## Narrow to the sign vectors that foot the most columns on the fixed lines
+    ## - but only where signs were actually unknown, and only when at least one
+    ## column IS clean. Dover Downs' financing section is the counter-example:
+    ## both of its columns are waiting on a missing value, so no column foots on
+    ## the fixed lines and there is nothing to narrow. Bailing out there took
+    ## the cash flow statement from 100% resolved to 0%.
+    if (sgn && length(cand) > 1) {
+      nfoot <- vapply(cand, function(sv)
+        sum(abs(sv_for(sv) - tot) <= FOOT_TOL), integer(1))
+      if (max(nfoot) > 0) cand <- cand[nfoot == max(nfoot)]
+    }
+
+    ## ---- STEP 2: CLOSE THE GAP IN EVERY OTHER COLUMN -------------------
+    ## With the signs fixed, each column has one number missing from it and the
+    ## gap says what that number must be. No search over placements.
+    pgrid <- expand.grid(lapply(opts, seq_along), KEEP.OUT.ATTRS = FALSE)
+    hit <- NULL
+    for (sv0 in cand) {
+      sv <- c(sv0, rep(sv0[1], length(amb)))     # ambiguous rows share the sign
+      if (!sgn) sv <- rep(1, nf + length(amb))
+      b <- sv_for(sv0)
+      for (g in seq_len(nrow(pgrid))) {
+        s <- b
+        for (j in seq_along(amb)) {
+          cc2 <- opts[[j]][[pgrid[g, j]]]
+          s[cc2] <- s[cc2] + sv[nf + j] * vals[[j]]
+        }
+        if (all(abs(s - tot) <= FOOT_TOL)) {
+          if (!is.null(hit)) { hit <- NA; break }            # a tie: give up
+          hit <- list(g = g)
+        }
+      }
+      if (length(hit) == 1 && is.na(hit[[1]])) break
+    }
+    if (is.null(hit) || (length(hit) == 1 && is.na(hit[[1]]))) next
+    g <- hit$g
+    for (j in seq_along(amb)) {
+      cc <- opts[[j]][[pgrid[g, j]]]
+      nv <- rep(NA_real_, nc); nv[cc] <- vals[[j]]
+      sel <- d$line_order == ord[amb[j]]
+      d$value_printed[sel][order(d$col_order[sel])] <- nv
+      d$col_placed_by_footing[sel] <- TRUE
+      d$col_unplaced[sel] <- FALSE
+    }
+  }
+  d
+}
+
 L <- bind_rows(lapply(raw, one))
 if (!nrow(L))
   stop("no usable extractions - every record had found=FALSE or no rows. ",
@@ -129,10 +344,32 @@ if (!nrow(L))
 cat("long rows:", nrow(L), " filings:", length(unique(L$wrdsfname)),
     "  (records with found=FALSE are excluded by design)\n")
 
+## ---- resolve the unplaced values, then rescale ----------------------------
+## Runs before `amount` is used for anything, because moving a value between
+## columns changes which period it belongs to.
+if (!"col_unplaced" %in% names(L)) L$col_unplaced <- FALSE
+L$col_unplaced[is.na(L$col_unplaced)] <- FALSE
+L$col_placed_by_footing <- FALSE
+n_amb0 <- sum(L$col_unplaced)
+if (n_amb0) {
+  L <- bind_rows(lapply(split(L, paste(L$wrdsfname, L$statement)), function(d) {
+    st <- unique(d$statement)
+    if (!any(d$col_unplaced) || length(st) != 1 || !st %in% names(SUBTOT)) return(d)
+    tryCatch(resolve_unplaced(d, st), error = function(e) d)
+  }))
+  ## amount is derived from value_printed, so recompute it after the move
+  L$amount <- ifelse(L$unscaled_row, L$value_printed, L$value_printed * L$mult)
+}
+cat(sprintf("unplaced cells: %d  resolved by footing: %d (%.1f%%)  still flagged: %d\n",
+            n_amb0, sum(L$col_placed_by_footing),
+            if (n_amb0) 100 * sum(L$col_placed_by_footing) / n_amb0 else 0,
+            sum(L$col_unplaced)))
+
 L <- L %>% select(wrdsfname, cik, coname, form, fdate, rdate,
                   statement, stmt_raw, line_order, line_label,
                   col_order, col_heading, period_end, period_months,
                   value_printed, scale, mult, unscaled_row, amount,
+                  col_unplaced, col_placed_by_footing,
                   len_mismatch) %>%
   arrange(wrdsfname, statement, line_order, col_order)
 
