@@ -1400,11 +1400,54 @@ Not written yet, in the order they are needed:
 **`001c` is not optional** — the figures requirement and the contents-list test
 both read `numlines.rds`.
 
-Changing a pattern in `001b` or `001e` means re-running it (about 4 minutes for
-500 filings; it is a remote grep) before a locator will see the change. `001b`
-refuses to save if it finds markers for fewer than half the filings it asked
-about, because it used to overwrite a good cache with an empty one when a
-pattern broke.
+Changing a pattern in `001b` or `001e` means re-running it before a locator
+will see the change. Measured on the 500-filing holdout, 2026-11-19: **39s for
+`001b`, 47s for `001e`.** `001b` refuses to save if it finds markers for fewer
+than half the filings it asked about, because it used to overwrite a good cache
+with an empty one when a pattern broke.
+
+### Why the scans are fast, and the one rule that must stay out of `PAT`
+
+Both scans used to take ~3.4 s/filing, which is 24 days for the 780,364-filing
+inventory and was the binding constraint on collecting at all. Two fixes,
+measured 2026-11-19, took that to ~0.07 s/filing — a combined **49x** for
+`001e` and **57x** for `001b` — with the marker files **byte-identical** and the
+located line ranges **byte-identical** on the holdout (2,549 blocks, 488
+filings, all three statements in 411).
+
+1. **`LC_ALL=C` on every remote grep.** The filings are plain ASCII, but in the
+   login shell's UTF-8 locale `grep -i` case-folds per character as multibyte.
+   Worth 4.5x for nothing. Verified identical on 121,181 marker rows.
+2. **The company-name rule runs as a separate grep over short lines only.**
+   Inside `PAT` that single branch cost **93% of the whole scan** — `grep` tests
+   its bounded run (`{3,70}`, `{3,60}`) anchored at both ends against every
+   line including the 170-600 character wrapped prose paragraphs, which forces
+   the entire pattern off `grep`'s fast matcher. Removing it alone took `001e`
+   from 3.50 to 0.055 s/filing; de-bounding the *other* caps (`{0,40}`) saved
+   nothing measurable, so this one branch is the entire cost.
+
+**Do not fold `NAME_PAT` back into `PAT`, and do not "simplify" it by dropping
+the cap.** The character cap IS the semantics: it is what separates
+`THE ALLIED DEFENSE GROUP, INC.` from a prose sentence ending `...on the
+financial position of Alcoa`. De-bounding it was tried and measured at **980
+extra marker rows per 100 filings.** The rule is therefore unchanged; only the
+stream it sees is narrowed, by an `awk` guard on the space-and-tab-trimmed line
+length. That guard is **provably** lossless rather than merely tested: the
+pattern can match at most 70 + 11 (`corporation`) + 1 (`[.,]`) = 82 characters
+of non-space content, so the 90-character cap is strictly more generous than
+the rule itself.
+
+Two things that are NOT the bottleneck, so do not optimise them: reading the
+files (measured 0.004 s/filing — 55 MB off `/wrds/sec` in 0.4s) and shipping
+the markers back (identical timing with the output discarded remotely). An
+earlier plan to merge the three scans into one pass was abandoned for exactly
+this reason — re-reading a filing is free, so merging saves almost nothing.
+
+Because the name rule is a second `grep`, a line satisfying both patterns comes
+back twice, so both scripts now dedupe on `(wrdsfname, line, text)` after
+parsing. `001f` re-sorts by line everywhere it matters and builds its flags
+with `any()`, so a duplicate would have been harmless there, but the dedupe
+keeps the marker files identical to the old single-grep output.
 
 Supporting files, not steps:
 

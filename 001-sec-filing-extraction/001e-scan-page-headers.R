@@ -136,25 +136,62 @@ PAT <- paste0(
   ## "Consolidated Statements of Income, continued (Unaudited)" - Intl
   ## Bancshares runs its income statement across two pages this way, and
   ## without this the second page reads as a separate statement.
-  "|,", S, "?continued",
-  ## ---- the company name line -------------------------------------------
-  ## No digits in the class, or every sentence ending "...of the Company."
-  ## comes back. "subsidiaries" is here because the name is usually printed
-  ## as "X CORPORATION AND SUBSIDIARIES".
-  "|^", S, "?[a-z .,&'/-]{3,70}(inc|corp|corporation|company|holdings",
+  "|,", S, "?continued")
+
+## ---- the company name line, RUN SEPARATELY OVER SHORT LINES ONLY ---------
+## No digits in the class, or every sentence ending "...of the Company."
+## comes back. "subsidiaries" is here because the name is usually printed
+## as "X CORPORATION AND SUBSIDIARIES".
+##
+## THIS RULE IS NOT IN PAT, AND MUST NOT BE PUT BACK (measured 2026-11-19).
+## Inside PAT it cost 93% of the entire scan: grep tests a bounded run
+## ({3,70}) anchored at BOTH ends against every line, including the 170-600
+## character wrapped prose paragraphs that cannot possibly match it, and that
+## forces grep off its fast matcher for the whole pattern. Removing this one
+## branch took 001e from 3.50 to 0.055 s/filing; de-bounding the OTHER caps
+## ({0,40}) saved nothing at all, so this branch alone is the cost.
+##
+## It cannot simply be dropped or de-bounded: the 70-character cap IS the
+## semantics. Without it, prose lines ending "...on the financial position of
+## Alcoa" match too (measured: 980 extra rows per 100 filings).
+##
+## So the rule is unchanged and runs against short lines only. The guard is
+## PROVABLY lossless, not just empirically: this pattern can match at most
+## 70 chars of run + 11 ("corporation") + 1 ("[.,]") = 82 characters of
+## non-space content, so a 90-character cap on the space-and-tab-trimmed
+## length is strictly more generous than the rule itself. Tabs are trimmed as
+## well as spaces because S is [[:space:]], not " ".
+##
+## The "^[0-9]+:" prefix is there because awk prepends NR":" - grep -n cannot
+## be used once awk has filtered the stream, or the numbers would count only
+## surviving lines. Measured: 3.502 -> 0.071 s/filing (49.5x) with the marker
+## set identical on 100 filings, 121,181 rows, 0 gained and 0 lost.
+NAME_PAT <- paste0(
+  "^[0-9]+:", S, "?[a-z .,&'/-]{3,70}(inc|corp|corporation|company|holdings",
   "|subsidiaries|lp|llc|plc|trust|partners)[.,]?", S, "?$")
 
+## LC_ALL=C ON EVERY GREP. The filings are plain ASCII, but in the login
+## shell's UTF-8 locale "grep -i" case-folds per character as multibyte, which
+## cost a measured 4.5x on this pattern for nothing. Verified byte-identical:
+## 121,181 marker rows either way, not one line different in either direction.
+##
+## The join is done by awk rather than "tail -n +2 > /tmp && paste", which
+## wrote a full copy of every filing to the login node's /tmp. That copy was
+## free on time (storage measured at 0.004 s/filing) but it is 414 KB per
+## filing of avoidable write on a node shared with ~260 users.
 remote <- paste0('
 R=/wrds/sec/wrds_clean_filings
 P=', shQuote(PAT, type = "sh"), '
+N=', shQuote(NAME_PAT, type = "sh"), '
 while read FF; do
   p="$R/$FF"
   [ -f "$p" ] || continue
   n=$(wc -l < "$p" | tr -dc 0-9)
   echo "#F|$FF|$n"
-  tail -n +2 "$p" > /tmp/nx_$$
-  paste -d" " "$p" /tmp/nx_$$ | grep -niE "$P" | cut -c1-170 | tr -d "|" | sed "s/:/|/" | sed "s/^/M|/"
-  rm -f /tmp/nx_$$
+  awk \'{ if (NR>1) print pv" "$0; pv=$0 } END { print pv }\' "$p" > /tmp/j_$$
+  LC_ALL=C grep -niE "$P" /tmp/j_$$ | cut -c1-170 | tr -d "|" | sed "s/:/|/" | sed "s/^/M|/"
+  awk \'{ t=$0; sub(/^[ \\t]+/,"",t); sub(/[ \\t]+$/,"",t); if (length(t)<=90) print NR":"$0 }\' /tmp/j_$$ | LC_ALL=C grep -iE "$N" | cut -c1-170 | tr -d "|" | sed "s/:/|/" | sed "s/^/M|/"
+  rm -f /tmp/j_$$
 done < /tmp/hd_$$.txt
 rm -f /tmp/hd_$$.txt')
 
@@ -190,6 +227,13 @@ for (i in seq_along(ln)) {
 M <- data.frame(wrdsfname = ff[keep], nlines = nl[keep], line = lno[keep],
                 text = gsub("[[:space:]]+", " ", txt[keep]), stringsAsFactors = FALSE)
 M <- M[!is.na(M$wrdsfname) & nzchar(M$wrdsfname), ]
+## DEDUPE, because the company name rule now runs as a SECOND grep. A line
+## that satisfies both PAT and NAME_PAT - "SPX Corporation" sitting under a
+## statement title, say - was emitted once by the single grep and is emitted
+## twice by two. 001f re-sorts by line everywhere it matters and its flags are
+## built with any(), so a duplicate row is harmless there, but dropping it
+## here keeps the marker file identical to what the old single-grep produced.
+M <- M[!duplicated(M[c("wrdsfname", "line", "text")]), ]
 
 ## ---- REFUSE TO SAVE A COLLAPSED RESULT ----------------------------------
 ## Same guard as 001b, for the same reason: one bad character in the pattern

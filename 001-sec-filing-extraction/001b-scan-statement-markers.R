@@ -194,7 +194,13 @@ PAT <- paste0(
   ##
   ## No digits in the character class, or every prose sentence ending in
   ## "...of the Company." comes back too.
-  "|^", S, "?[a-z .,&'/-]{3,60}(inc|corp|corporation|company|holdings|lp|llc|plc|trust|partners)[.,]?", S, "?$",
+  ##
+  ## THE RULE ITSELF IS NOT HERE. It is NAME_PAT, below PAT, and runs as a
+  ## separate grep over short lines only. Inside PAT it cost 93% of the scan
+  ## (measured 2026-11-19: 3.38 -> 0.059 s/filing once moved out, 57x), because
+  ## grep tests the bounded run {3,60} anchored at both ends against every
+  ## line including the wrapped prose paragraphs, which forces the whole
+  ## pattern off grep's fast matcher. Do not fold it back in.
   ## SCALE. Without this the chunk cannot be padded up far enough to include the
   ## multiplier, and every extracted number comes out 1,000x or 1,000,000x wrong.
   ## Measured: NONE of four hand-checked chunks contained their scale line, because
@@ -212,17 +218,49 @@ PAT <- paste0(
   "|\\((thousands|millions|billions)\\)",
   "|(thousands|millions|billions)\\)")
 
+## ---- the company name line, RUN SEPARATELY OVER SHORT LINES ONLY ---------
+## Why the rule exists at all is in the comment block above, inside PAT: a
+## combined filing prints the subsidiary's name above its own statements, and
+## that is the one error class whose numbers foot perfectly while belonging to
+## the wrong company.
+##
+## Why it is OUT of PAT is performance, and it cannot be fixed by relaxing the
+## rule instead: the 60-character cap IS the semantics. De-bound it and prose
+## lines ending "...of the Company." match too (measured on the 001e twin:
+## 980 extra marker rows per 100 filings). So the rule is unchanged and the
+## stream it sees is narrowed.
+##
+## The guard is PROVABLY lossless, not merely empirically: this pattern can
+## match at most 60 chars of run + 11 ("corporation") + 1 ("[.,]") = 72
+## characters of non-space content, so a 90-character cap on the trimmed
+## length is strictly more generous than the rule. Tabs are trimmed as well
+## as spaces because S is [[:space:]], not " ".
+##
+## "^[0-9]+:" is there because awk prepends NR":" - grep -n cannot be used
+## once awk has filtered the stream or the numbers would count only surviving
+## lines. Measured: 3.382 -> 0.059 s/filing (57.1x), marker set identical on
+## 100 filings (44,220 rows, 0 gained, 0 lost).
+NAME_PAT <- paste0(
+  "^[0-9]+:", S, "?[a-z .,&'/-]{3,60}(inc|corp|corporation|company|holdings",
+  "|lp|llc|plc|trust|partners)[.,]?", S, "?$")
+
 s <- ssh_connect(paste0(key_get("wrds-user"), "@wrds-cloud.wharton.upenn.edu"),
                  passwd = key_get("wrds-password"))
+## LC_ALL=C ON EVERY GREP. The filings are plain ASCII, but in the login
+## shell's UTF-8 locale "grep -i" case-folds per character as multibyte, which
+## cost a measured 4.5x on this pattern for nothing. Verified byte-identical
+## output, so this is free speed and not a tradeoff.
 remote <- paste0('
 R=/wrds/sec/wrds_clean_filings
 P=', shQuote(PAT, type = "sh"), '
+N=', shQuote(NAME_PAT, type = "sh"), '
 while read FF; do
   p="$R/$FF"
   [ -f "$p" ] || continue
   n=$(wc -l < "$p" | tr -dc 0-9)
   echo "#F|$FF|$n"
-  grep -niE "$P" "$p" | cut -c1-120 | tr -d "|" | sed "s/:/|/" | sed "s/^/M|/"
+  LC_ALL=C grep -niE "$P" "$p" | cut -c1-120 | tr -d "|" | sed "s/:/|/" | sed "s/^/M|/"
+  awk \'{ t=$0; sub(/^[ \\t]+/,"",t); sub(/[ \\t]+$/,"",t); if (length(t)<=90) print NR":"$0 }\' "$p" | LC_ALL=C grep -iE "$N" | cut -c1-120 | tr -d "|" | sed "s/:/|/" | sed "s/^/M|/"
 done < /tmp/mk_$$.txt
 rm -f /tmp/mk_$$.txt')
 
@@ -260,6 +298,11 @@ for (i in seq_along(ln)) {
 M <- data.frame(wrdsfname=ff[keep], nlines=nl[keep], line=lno[keep],
                 text=gsub("[[:space:]]+", " ", txt[keep]), stringsAsFactors=FALSE)
 M <- M[!is.na(M$wrdsfname) & nzchar(M$wrdsfname), ]
+## DEDUPE, because the company name rule now runs as a SECOND grep. A line
+## satisfying both PAT and NAME_PAT was emitted once by the single grep and is
+## emitted twice by two, so this keeps the marker file identical to what the
+## old single-grep version produced.
+M <- M[!duplicated(M[c("wrdsfname", "line", "text")]), ]
 M <- merge(M, d, by="wrdsfname")
 ## ---- REFUSE TO SAVE A COLLAPSED RESULT -----------------------------------
 ## This script used to save unconditionally, and that turned one bad character

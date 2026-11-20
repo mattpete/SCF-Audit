@@ -29,7 +29,7 @@ while read FF; do
   p="$R/$FF"
   [ -f "$p" ] || continue
   printf "#%s " "$FF"
-  grep -nE "[0-9][0-9,.]{2,}" "$p" | cut -d: -f1 | tr "\n" " "
+  LC_ALL=C grep -nE "[0-9][0-9,.]{2,}" "$p" | cut -d: -f1 | tr "\n" " "
   echo ""
 done < /tmp/dn_$$.txt
 rm -f /tmp/dn_$$.txt'
