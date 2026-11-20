@@ -1449,6 +1449,71 @@ parsing. `001f` re-sorts by line everywhere it matters and builds its flags
 with `any()`, so a duplicate would have been harmless there, but the dedupe
 keeps the marker files identical to the old single-grep output.
 
+### Running the scans on the WRDS grid (`*-grid-*.R`) — worth ~3x, not 10x
+
+The SSH scans hold one connection open and stream `grep` output down it, which
+is one CPU and a laptop that must stay awake. The grid twins —
+`001b-grid-scan-statement-markers.R`, `001c-grid-map-numeric-lines.R`,
+`001e-grid-scan-page-headers.R`, on `000-grid-helpers.R` — submit the same
+`grep` as an SGE array job instead. **The SSH scripts remain authoritative and
+are unchanged**; `grid_patterns()` reads `PAT`, `NAME_PAT` and the remote body
+*out of them* at run time by parsing the file and evaluating only those
+assignments, so there is exactly one definition of each pattern and it cannot
+drift. Verified: `001k-verify-grid-matches-ssh.R` compares both paths on the
+500-filing holdout and reports `markers4_raw` (191,548 rows), `markers_hdr`
+(533,563 rows) and `numlines` (500 filings, line for line) all **identical**.
+
+**The measured speedup is ~3x. The 10x the design was pitched on is wrong,**
+and the reason is the filesystem, not the CPU. All figures from `001e` on
+identical filings, markers byte-identical in every run:
+
+| path | filings | tasks | wall | s/filing | vs SSH |
+|---|---|---|---|---|---|
+| SSH, login node | 500 | — | 38s | 0.0757 | 1.0x |
+| grid, **one** task | 500 | 1 | 82s | 0.1644 | **0.46x** |
+| grid, 10 tasks | 5,000 | 10 | 143s | 0.0287 | 2.6x |
+| grid, 100 tasks | 5,000 | 100 | 164s | 0.0328 | 2.3x |
+
+1. **A single grid task is slower than the login node** — 0.164 s/filing against
+   0.0757, about 0.124 once the ~20s queue start is removed. A grid node reads
+   `/wrds/sec` more slowly, so every task starts ~1.6x down.
+2. **Ten concurrent tasks halve each other's throughput.** 500 filings take 62s
+   of work alone and ~123s per task when ten run together. The archive is
+   shared NFS and the readers contend.
+
+`10 slots × (1/1.6) × (1/2) ≈ 3x`, which is what the end-to-end numbers give.
+**More parallelism does not help** — 100 tasks came out *slower* than 10 — so
+the 10-slot cap is not the binding constraint, the shared filesystem is. For
+660,715 Compustat-screened filings that is roughly **34 hours of SSH becoming
+roughly 12 hours detached**, which is worth having but is not an order of
+magnitude.
+
+**Measured WRDS facts** (2026-11-20, policy and subject to change):
+`all.q` 892 slots; **per-user cap 10 slots, hard** (`qconf -srqs`); `s_rt`
+168:00:00 so a long task will not be killed; `max_aj_tasks` 75,000; home quota
+10 GB with 3.85 used, so **job output must not go to `~`**; scratch
+`/scratch/ua` 500 GB, shared with all of UA. **Grid nodes can read
+`/wrds/sec/wrds_clean_filings` directly** — this was the real unknown, since
+grid nodes are separate hosts from the login node, and it was verified against
+three real filings before any of this was built.
+
+Two traps, both of which cost a run:
+
+- **Line endings.** `writeLines()` on Windows emits CRLF. SGE *rejects* a job
+  script with CRLF outright, which is loud and fine; a CRLF **filing list** is
+  the dangerous one, because every path would silently gain a `\r`, every file
+  would be "not found", and the scan would return nothing with no error. Every
+  file staged to WRDS goes through `write_unix()`.
+- **A stale job directory.** `grid_run()` deletes and recreates its scratch
+  directory before staging, because collecting a previous run's output as this
+  run's is the worst available silent failure.
+
+`ssdwork.q` has 300 free slots and is absent from the `users {*}` 10-slot rule,
+so it would likely permit more concurrency. **Deliberately not used:** routing
+around a published per-user cap is how an account gets noticed, and since the
+bottleneck is the shared archive rather than slots it would buy little. Ask
+WRDS first.
+
 Supporting files, not steps:
 
 | file | does |
