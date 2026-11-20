@@ -1,7 +1,7 @@
 ## ============================================================================
-## 011c  MAP NUMERIC LINES                 step 011 (locate), substep c
+## 001c  MAP NUMERIC LINES                 step 001, substep c
 ## Line numbers of every line holding a statement-like number, per filing.
-## 011d uses this to tell a table apart from prose. Runs BEFORE 011d; the
+## legacy/build-rank-candidates uses this to tell a table apart from prose. Runs BEFORE legacy/build-rank-candidates; the
 ## letters now follow the dependency order (they used to not).
 ## In : cache/markers3.rds   (ORPHAN - see README, nothing in this repo
 ##                            writes it)
@@ -16,7 +16,7 @@ suppressMessages({library(keyring); library(ssh)})
 PILOT <- Sys.getenv("PILOT", "pilot-2026-11")
 SP <- paste0(Sys.getenv("SEC_DATA_PATH"), "/", PILOT, "/cache/")
 ## The filing list only. markers3.rds is an early intermediate that a fresh
-## sample never produces, so fall back to what 011b writes.
+## sample never produces, so fall back to what 001b writes.
 mf <- paste0(SP, "markers3.rds")
 if (!file.exists(mf)) mf <- paste0(SP, "markers4_raw.rds")
 M <- readRDS(mf)

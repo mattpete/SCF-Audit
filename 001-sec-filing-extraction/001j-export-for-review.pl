@@ -1,8 +1,8 @@
 #!/usr/bin/perl
-## 011f  EXPORT FOR REVIEW  -  step 011 (locate), substep f: VALIDATION.
+## 001j  EXPORT FOR REVIEW  -  step 001, substep j: VALIDATION.
 # Export located statement text to a folder a HUMAN can navigate, with an index.
 #
-#   perl 011f-export-for-review.pl <chunks.jsonl> <outdir> [name-pattern]
+#   perl 001j-export-for-review.pl <chunks.jsonl> <outdir> [name-pattern]
 #
 # With a name pattern it exports every chunk whose company name matches (case
 # insensitive). With no pattern it exports everything, which is ~5 MB of text.

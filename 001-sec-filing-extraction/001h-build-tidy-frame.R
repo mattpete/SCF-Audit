@@ -1,8 +1,8 @@
-## 012b  BUILD TIDY FRAME                step 012 (extract), substep b
+## 001h  BUILD TIDY FRAME                step 001, substep h
 ## Turn the API's per-chunk JSON into the analysis frame: one row per
 ## filing x statement x line x period, with the amount in ACTUAL DOLLARS.
 ##
-## Input :  extract/extracted.jsonl   (what 012a writes: one JSON object per
+## Input :  extract/extracted.jsonl   (what legacy/extract-statements writes: one JSON object per
 ##                                     chunk - the extraction plus the chunk's
 ##                                     own metadata)
 ## Output:  extract/scf_text_lines.parquet   the frame
@@ -30,7 +30,7 @@ SP  <- Sys.getenv("TIDY_OUT",
          paste0(Sys.getenv("SEC_DATA_PATH"), "/pilot-2026-11/extract/"))
 stopifnot(nzchar(Sys.getenv("SEC_DATA_PATH")))
 IN  <- Sys.getenv("TIDY_IN", paste0(SP, "extracted.jsonl"))
-if (!file.exists(IN)) stop("no ", IN, " - run 012a-extract-statements.py fetch first")
+if (!file.exists(IN)) stop("no ", IN, " - run legacy/extract-statements.py fetch first")
 cat("reading", IN, "\n")
 
 ## ---- scale words to multipliers -------------------------------------------
@@ -62,7 +62,7 @@ raw <- lapply(readLines(IN, warn = FALSE), function(l) {
 raw <- raw[!vapply(raw, is.null, logical(1))]
 cat("chunks read:", length(raw), "\n")
 
-## 012a may nest the model's answer under `result`; accept either shape.
+## legacy/extract-statements may nest the model's answer under `result`; accept either shape.
 pick <- function(r, k) {
   if (!is.null(r[[k]])) return(r[[k]])
   if (!is.null(r$result) && !is.null(r$result[[k]])) return(r$result[[k]])
@@ -369,7 +369,7 @@ resolve_unplaced <- function(d, stmt) {
 L <- bind_rows(lapply(raw, one))
 if (!nrow(L))
   stop("no usable extractions - every record had found=FALSE or no rows. ",
-       "Check that the input really is 012a's output and not the bare ",
+       "Check that the input really is legacy/extract-statements's output and not the bare ",
        "model answers without their chunk metadata.")
 cat("long rows:", nrow(L), " filings:", length(unique(L$wrdsfname)),
     "  (records with found=FALSE are excluded by design)\n")

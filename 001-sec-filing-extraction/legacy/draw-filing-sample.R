@@ -1,5 +1,5 @@
 ## ============================================================================
-## 011a  DRAW THE FILING SAMPLE            step 011 (locate), substep a
+## DRAW THE FILING SAMPLE  -  SUPERSEDED by the inventory (was 011a)
 ## Draws the 500-filing sample (set.seed(42) below) and probes whether each
 ## filing even has statement headings in its WRDS clean text.
 ## In : WRDS wrdssec.wrds_forms

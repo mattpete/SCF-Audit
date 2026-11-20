@@ -1,6 +1,6 @@
 # The extraction prompt, and why it is shaped this way
 
-> Loaded by `012a-extract-statements.py`. Written BEFORE the Nov 2026 prompt
+> Loaded by `legacy/extract-statements.py`. Written BEFORE the Nov 2026 prompt
 > revision, so it predates the column-object format, the per-row `x` flag and
 > the precision-is-not-a-multiplier rule. The live files are
 > `prompt/system-prompt.txt` and `prompt/output-schema.json`.
@@ -10,7 +10,7 @@ Two files hold the actual prompt. This file explains them.
 - `prompt/system-prompt.txt` — the instructions, sent as a cached system block
 - `prompt/output-schema.json` — the JSON schema the response is constrained to
 
-Both are loaded by `012a-extract-statements.py`. Edit the two files, not the Python.
+Both are loaded by `legacy/extract-statements.py`. Edit the two files, not the Python.
 
 **Status: written, never run.** No API call has been made. Everything below is
 a design argument, not a measurement. The pilot (`submit --limit 60`) is what

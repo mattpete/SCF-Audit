@@ -1,9 +1,9 @@
 ## ============================================================================
-## 011g  EXPORT EVERY CANDIDATE, FLAGGED       step 011 (locate), substep g
-## The counterpart to 011e for approach B. Instead of sending the one block the
+## 001g  EXPORT EVERY CANDIDATE, FLAGGED       step 001, substep g
+## The counterpart to legacy/export-chunk-text-approach-a for approach B. Instead of sending the one block the
 ## locator chose, send every block that passed the structure test and let the
 ## model decide which belongs to the company on this filing row.
-## In : cache/chunks_anch.rds (011f)
+## In : cache/chunks_anch.rds (001d)
 ## Out: extract/candidates.jsonl, cache/candtext.rds
 ## ============================================================================
 ## WHY SEND SEVERAL (Matt, 2026-11-17). A combined 10-K holds two or more
@@ -28,10 +28,10 @@
 ## block, how many other cash flow statements sit between it and the anchor,
 ## and the company name and CIK on this filing row. The first two are evidence
 ## about which entity the block belongs to; the third is the answer it has to
-## match. Nothing is discarded here - 011f ranks, this ships the whole list.
+## match. Nothing is discarded here - 001d ranks, this ships the whole list.
 suppressMessages({library(DBI); library(RPostgres); library(keyring)
                   library(ssh); library(jsonlite)})
-## PILOT names the run's cache directory, as in 011b/c/f/h/i. ONLY_N pulls the
+## PILOT names the run's cache directory, as in 001b/c/f/h/i. ONLY_N pulls the
 ## text for a random N filings instead of all of them, which is what a review
 ## sample needs - the full pull is a long remote job for text nobody will read.
 PILOT  <- Sys.getenv("PILOT", "pilot-2026-11")
@@ -41,8 +41,8 @@ OUT <- paste0(Sys.getenv("SEC_DATA_PATH"), "/", PILOT, "/extract/")
 dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
 stopifnot(nzchar(Sys.getenv("SEC_DATA_PATH")))
 
-## Which locator's candidates to ship. "anch" = 011f (approach B),
-## "hdr" = 011i (approach C, cut at page headers).
+## Which locator's candidates to ship. "anch" = 001d (approach B),
+## "hdr" = 001f (approach C, cut at page headers).
 IN  <- Sys.getenv("IN_CHUNKS", "chunks_hdr.rds")
 C <- readRDS(paste0(SP, IN))
 cat("reading", IN, "
@@ -151,9 +151,9 @@ D <- merge(D, got, by = c("wrdsfname", "kind", "start"), all.x = TRUE)
 cat("\ntext resolved for", sum(!is.na(D$text) & nzchar(D$text)), "of", nrow(D), "candidates\n")
 
 ## ---- drop page furniture -------------------------------------------------
-## Same list as 011e. The notes reference and the Table of Contents line are
+## Same list as legacy/export-chunk-text-approach-a. The notes reference and the Table of Contents line are
 ## removed from what the MODEL reads while remaining available as BOUNDARY
-## markers in 011f - 011f reads the marker file, not this text.
+## markers in 001d - 001d reads the marker file, not this text.
 FURNITURE <- paste0(
   "^(back to |return to )?table of contents$|^index$",
   "|^see (the )?(accompanying|notes)|^the accompanying notes",

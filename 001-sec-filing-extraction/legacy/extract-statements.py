@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-012a  EXTRACT STATEMENTS               step 012 (extract), substep a
+EXTRACT STATEMENTS  -  SUPERSEDED: the paid API route was dropped (was 012a)
 
 Send located statement text to Claude and get structured numbers back.
 
-Reads   extract/chunks.jsonl        (written by 011e-export-chunk-text.R)
+Reads   extract/chunks.jsonl        (written by legacy/export-chunk-text-approach-a.R)
 Writes  extract/batch-state.json    submission state + custom_id map
         extract/extracted.jsonl     one result per chunk, with token usage
 
@@ -15,11 +15,11 @@ JSON rather than JSON-ish prose.
     pip install -r requirements.txt
     set ANTHROPIC_API_KEY=sk-ant-...
 
-    python 012a-extract-statements.py estimate                 # no API key needed
-    python 012a-extract-statements.py estimate --limit 60
-    python 012a-extract-statements.py submit --limit 60         # the cheap pilot
-    python 012a-extract-statements.py status
-    python 012a-extract-statements.py fetch
+    python legacy/extract-statements.py estimate                 # no API key needed
+    python legacy/extract-statements.py estimate --limit 60
+    python legacy/extract-statements.py submit --limit 60         # the cheap pilot
+    python legacy/extract-statements.py status
+    python legacy/extract-statements.py fetch
 
 Start with `estimate`, then `submit --limit 60`. Sixty chunks costs well under a
 cent and tells you whether the prompt works before you spend on 1,500.
@@ -87,7 +87,7 @@ def load_prompt():
 def load_chunks(limit=None, kinds=None, forms=None):
     path = data_dir() / "chunks.jsonl"
     if not path.exists():
-        sys.exit(str(path) + " not found. Run 011e-export-chunk-text.R first.")
+        sys.exit(str(path) + " not found. Run legacy/export-chunk-text-approach-a.R first.")
     rows = []
     with path.open(encoding="utf-8") as f:
         for line in f:
@@ -219,7 +219,7 @@ def cmd_submit(args):
     print("")
     print("state written to %s" % (out / "batch-state.json"))
     print("Most batches finish within the hour; the cap is 24 hours.")
-    print("Next:  python 012a-extract-statements.py status")
+    print("Next:  python legacy/extract-statements.py status")
 
 
 def read_state():
@@ -245,7 +245,7 @@ def cmd_status(args):
     print("")
     print("%d/%d batches ended" % (done, len(state["batches"])))
     if done == len(state["batches"]):
-        print("Next:  python 012a-extract-statements.py fetch")
+        print("Next:  python legacy/extract-statements.py fetch")
 
 
 def cmd_fetch(args):

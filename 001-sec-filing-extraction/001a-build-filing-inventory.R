@@ -1,4 +1,4 @@
-## 010 -- BUILD THE FILING INVENTORY
+## 001a -- BUILD THE FILING INVENTORY
 ##
 ## Step 1 of five. One row per filing we could ever want to extract, with the
 ## screens recorded as COLUMNS rather than applied as filters, and a status
@@ -9,8 +9,8 @@
 ##                                    only place the SEC-assigned SIC lives)
 ## Out: {SEC_DATA_PATH}/inventory/filing_inventory.parquet
 ##
-## Numbered 010 because it runs BEFORE the locate step (011) and the extract
-## step (012). It renumbers nothing else.
+## Numbered 001a because it runs before the locate substeps (001b-001f) and
+## the extract substep (001h).
 ##
 ## WHY SCREENS ARE COLUMNS AND NOT A FILTER. The sample definition is not
 ## settled -- whether banks, insurers and utilities stay is an open research
@@ -270,7 +270,7 @@ d <- d |>
 ## OPEN PROBLEM, not solved here: a co-filed submission contains the
 ## statements of BOTH registrants, so one chunk can hold two income
 ## statements. That is the International Bancshares / United Airlines case
-## already recorded in 011i -- picking which set belongs to which CIK is an
+## already recorded in 001f -- picking which set belongs to which CIK is an
 ## extraction problem, and `n_registrant_rows > 1` is the flag for it.
 ## THE PRIMARY ROW MUST BE AN IN-SAMPLE ONE. A co-filed submission can have
 ## one registrant we keep and one we drop -- a REIT parent (6798, dropped)

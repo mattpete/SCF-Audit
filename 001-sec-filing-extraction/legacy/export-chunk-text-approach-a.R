@@ -1,7 +1,7 @@
 ## ============================================================================
-## 011e  EXPORT CHUNK TEXT                 step 011 (locate), substep e
-## Pulls the chosen block text off WRDS. This is the handoff to step 012.
-## In : cache/chunks8.rds (011d)
+## EXPORT CHUNK TEXT  -  SUPERSEDED by 001g (approach A; was 011e)
+## Pulls the chosen block text off WRDS. Approach A's handoff to extraction.
+## In : cache/chunks8.rds (legacy/build-rank-candidates)
 ## Out: extract/chunks.jsonl   <- what the model reads
 ##      cache/chunktext.rds, cache/chunk_unresolved.rds
 ## ============================================================================
@@ -14,7 +14,7 @@
 ##          cache/chunktext.rds    (the same, as an R object)
 ##          cache/chunk_unresolved.rds  (anything still not a statement)
 ##
-## Run this BEFORE 012a-extract-statements.py. It needs no API key.
+## Run this BEFORE legacy/extract-statements.py. It needs no API key.
 ## Roughly 1,500 chunks, ~18 MB of base64 over SSH, a few minutes.
 ##
 ## WHY THIS VALIDATES AND RETRIES. Every 10-K and 10-Q contains a cash flow
@@ -24,7 +24,7 @@
 ## of those 27 a CORRECT block was sitting in the candidate list, out-ranked.
 ## Reranking alone recovered only 19 of 27, so the fix is not a better sort -
 ## it is to check the text we actually got and walk down the ranked candidates
-## until the block really is a statement. Ranking (011d) just makes rank 1 right
+## until the block really is a statement. Ranking (legacy/build-rank-candidates) just makes rank 1 right
 ## more often, which keeps the number of round trips down.
 ##
 ## Transport note: chunk text contains newlines, so it cannot be sent back
@@ -49,7 +49,7 @@ MAX_RANK <- 12
 
 C <- readRDS(paste0(SP, "chunks8.rds"))
 if (!"rank" %in% names(C))
-  stop("chunks8.rds has no `rank` column - re-run 011d-build-rank-candidates.R")
+  stop("chunks8.rds has no `rank` column - re-run legacy/build-rank-candidates.R")
 C$key <- paste(C$wrdsfname, C$kind)
 cat("candidate blocks:", nrow(C), " filing x statement slots:",
     length(unique(C$key)), "\n")
@@ -131,7 +131,7 @@ pull_chunks <- function(z, label = "") {
 ## No regex separates a printed statement from a page that merely looks like one;
 ## reading the text is what settles it, and the model reads the text. So this is
 ## now only a cheap "is it worth an API call" gate, and correctness lives in the
-## model's own `found` / `statement` fields plus the footing check in 012b.
+## model's own `found` / `statement` fields plus the footing check in 001h.
 is_statement <- function(tx, kind) {
   v  <- strsplit(tx, "\n", fixed = TRUE)[[1]]
   v  <- v[nzchar(trimws(v))]

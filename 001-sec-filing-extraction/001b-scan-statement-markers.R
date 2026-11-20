@@ -1,5 +1,5 @@
 ## ============================================================================
-## 011b  SCAN STATEMENT MARKERS           step 011 (locate), substep b
+## 001b  SCAN STATEMENT MARKERS           step 001, substep b
 ## One remote grep pass per filing: every statement title, subtotal, roll-
 ## forward and SCALE line, with its line number. The scale patterns are the
 ## reason a chunk can be padded up far enough to include the multiplier.
@@ -23,7 +23,7 @@ d <- d[!duplicated(d$wrdsfname), ]
 S <- "[[:space:]]+"; W <- ".{0,40}"
 ## An OPTIONAL space, because Norwood Financial writes "Cashflows" as one word
 ## and a required space missed its cash flow statement entirely. Same fix as
-## in 011h (Matt, 2026-11-18).
+## in 001e (Matt, 2026-11-18).
 S0 <- "[[:space:]]*"
 PAT <- paste0(
   ## titles
@@ -46,7 +46,7 @@ PAT <- paste0(
   ## ...and the BARE section header. Plenty of filers print just "OPERATING
   ## ACTIVITIES:" with no "cash flows from" in front of it, and with only the
   ## two patterns above those lines were never captured at all - so no marker
-  ## existed for them and 011d could not tell a whole statement from one
+  ## existed for them and legacy/build-rank-candidates could not tell a whole statement from one
   ## missing a section. Measured: the investing landmark was absent from 107
   ## otherwise-sound cash flow spans for exactly this reason.
   "|(operating|investing|financing)", S, "activities",
@@ -81,7 +81,7 @@ PAT <- paste0(
   ## Windows, which wraps the pattern in DOUBLE quotes - so a "$(" sequence
   ## anywhere in it becomes command substitution and the remote shell executes
   ## part of the regex. The symptom is silent and total: grep returns nothing
-  ## for every filing, 011b saves an EMPTY marker file over the good one, and
+  ## for every filing, 001b saves an EMPTY marker file over the good one, and
   ## the next script reports zero rows with no error anywhere. shQuote(type =
   ## "sh") below is the actual fix; this ordering is belt and braces.
   "|^", S, "?(revenues?|sales)", S, "?[,:]?", S, "?[0-9($]",
@@ -166,9 +166,9 @@ PAT <- paste0(
   ## statements section explicitly, which is stronger than any window width:
   ## the statements are the blocks BETWEEN the separators.
   ##
-  ## Added for 011f, which anchors on the cash flow statement (the one we
+  ## Added for 001d, which anchors on the cash flow statement (the one we
   ## locate most reliably) and then looks for the other two inside that
-  ## section. 011d does not read these and is unaffected.
+  ## section. legacy/build-rank-candidates does not read these and is unaffected.
   ## Words get between "accompanying" and "notes": United Continental writes
   ## "The accompanying COMBINED Notes to Consolidated Financial Statements are
   ## an integral part of these statements.", which an adjacent-words pattern

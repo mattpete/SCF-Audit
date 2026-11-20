@@ -1,6 +1,6 @@
-## SMOKE TEST for 011e: pull a handful of chunks and write them as readable .txt
+## SMOKE TEST for legacy/export-chunk-text-approach-a: pull a handful of chunks and write them as readable .txt
 ## so the located statements can be eyeballed against the real filings.
-## Uses the SAME remote transport as 011e, so it tests the real path.
+## Uses the SAME remote transport as legacy/export-chunk-text-approach-a, so it tests the real path.
 
 suppressMessages({library(DBI); library(RPostgres); library(keyring)
                   library(ssh); library(jsonlite)})
@@ -40,7 +40,7 @@ fi <- dbGetQuery(wrds, sprintf(
 dbDisconnect(wrds)
 cat("metadata rows:", nrow(fi), "\n")
 
-## ---- same remote pipeline as 011e (single line per command, see its note)
+## ---- same remote pipeline as legacy/export-chunk-text-approach-a (single line per command, see its note)
 remote <- '
 R=/wrds/sec/wrds_clean_filings
 while IFS="~" read FF KIND A B; do

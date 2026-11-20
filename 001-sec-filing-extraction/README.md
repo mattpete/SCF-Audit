@@ -1,4 +1,4 @@
-# 011 — Locating financial statements in SEC filings
+# 001 — Locating financial statements in SEC filings
 
 Pilot run 2026-11-13/14. Developed in a different repo and copied here; the data
 moved to its own OneDrive folder on 2026-11-15, so read **Where the data lives**
@@ -45,10 +45,10 @@ Agreed structure, Matt, 2026-11-19. Scripts are numbered by step.
 
 | step | what it does | script | state |
 |---|---|---|---|
-| **1** | build the inventory: every filing we could want, with the screens as columns | `010-build-filing-inventory.R` | **built and run.** 913,756 rows, 780,364 filings to fetch |
-| **2** | pull the chunk text off WRDS for the uncollected part of the inventory | `011g` (pull) + `011h`/`011i` (locate) | locating works, 96.6% on a fresh holdout. Not yet wired to the inventory |
+| **1** | build the inventory: every filing we could want, with the screens as columns | `001a-build-filing-inventory.R` | **built and run.** 913,756 rows, 780,364 filings to fetch |
+| **2** | pull the chunk text off WRDS for the uncollected part of the inventory | `001g` (pull) + `001e`/`001f` (locate) | locating works, 96.6% on a fresh holdout. Not yet wired to the inventory |
 | **3** | turn chunk text into JSON line items — **in harness, not an API** | none; done by hand in a session | run once, on 10 filings. 1,890 rows, 15 of 18 cash flow columns footed |
-| **4** | JSON into a tidy parquet | `012b-build-tidy-frame.R` | built; produced the frame Matt reviewed 2026-11-16 |
+| **4** | JSON into a tidy parquet | `001h-build-tidy-frame.R` | built; produced the frame Matt reviewed 2026-11-16 |
 | **5** | compare filings to find revised line items | none yet — **but see below** | not started |
 
 **Step 5 is mostly already written, in the other track.** `Code/001a-extract-scf-lines-and-changes.R`
@@ -85,7 +85,7 @@ Three things before anything runs:
 Then:
 
 ```r
-source("011-sec-filing-extraction/010b-inventory-helpers.R")
+source("001-sec-filing-extraction/000-inventory-helpers.R")
 inv_progress()                      # who has done what
 b <- inv_todo("collect", n = 250)   # your next batch, nobody else's
 ```
@@ -97,10 +97,10 @@ silent conflict copy** — `filing_inventory-DESKTOP-ABC.parquet` — with no er
 and one person's afternoon gone. So:
 
 - **Nobody writes the inventory.** It is a cached join, rebuilt by re-running
-  `010`.
+  `001a`.
 - Progress lives in **append-only per-person logs**,
   `inventory/logs/progress_{SCF_WHO}.csv`. You write only your own file.
-- `010` reads every log it finds and derives `collected` / `extracted` from
+- `001a` reads every log it finds and derives `collected` / `extracted` from
   them. Delete the inventory and rebuild: the logs restore exactly where
   everyone was.
 - **Filings are assigned by CIK**, not by row, so (a) a firm is never split
@@ -152,7 +152,7 @@ and per-form detail is under "Measured" below.
 **Not through the paid Batch API.** Matt's decision, 2026-11-19: the text is
 handed to a model inside a working session, a few hundred filings at a time,
 which also gives a transcription to check the chunks against. The Python
-`012a-extract-statements.py` path and the cost projections below are kept for
+`legacy/extract-statements.py` path and the cost projections below are kept for
 reference, not as the plan.
 
 ### The research-design question nobody has addressed
@@ -193,7 +193,7 @@ pipeline in `Code/`. The Dropbox originals were copied, not deleted.
         cache/     49 .rds files  <-- the irreplaceable part, see the sample note below
         scripts/   84 .R files, as originally written
         logs/      27 console captures
-        extract/   created by 011e: chunks.jsonl, batch-state.json, extracted.jsonl
+        extract/   created by legacy/export-chunk-text-approach-a: chunks.jsonl, batch-state.json, extracted.jsonl
         ledger.db  the SQLite inventory - designed, not built yet
         rows/      extracted line items, parquet partitioned by fiscal year
         README.md  copy of this file as of the move
@@ -228,7 +228,7 @@ Sys.getenv("DATA_PATH")       # the XBRL pipeline, unrelated
 ```
 
 The Python stage reads `SEC_DATA_PATH` too, but `.Renviron` is an R file and the
-shell never sees it, so `012a-extract-statements.py` parses `.Renviron` itself. Run it
+shell never sees it, so `legacy/extract-statements.py` parses `.Renviron` itself. Run it
 from the repo root, or export the variable.
 
 ### 2. Credentials
@@ -298,7 +298,7 @@ Population from 2002 onward: **192,510 10-Ks and 532,242 10-Qs** (724,752).
 
 ---
 
-## Step 1: the inventory (`010-build-filing-inventory.R`)
+## Step 1: the inventory (`001a-build-filing-inventory.R`)
 
 One row per **(accession, registrant CIK)** for every annual and quarterly
 report since 2002, written to `{SEC_DATA_PATH}/inventory/filing_inventory.parquet`.
@@ -381,7 +381,7 @@ filename collapses nothing — measured, zero rows. Therefore:
 
 **Open problem, not solved:** a co-filed submission contains the statements of
 *both* registrants, so one chunk can hold two income statements. That is the
-International Bancshares / United Airlines case already recorded in `011i`.
+International Bancshares / United Airlines case already recorded in `001f`.
 `n_registrant_rows > 1` is the flag for it.
 
 ### Verified
@@ -404,7 +404,7 @@ Every percentage here refers to a **500-filing random sample** of
 `wrdssec.wrds_forms` (10-K and 10-Q, `fdate >= 2002-01-01`); 147 10-K and
 353 10-Q, split into dev and held-out halves of 250 each.
 
-`011a-draw-filing-sample.R` has `set.seed(42)` immediately before:
+`legacy/draw-filing-sample.R` has `set.seed(42)` immediately before:
 
 ```sql
 ... ORDER BY random() LIMIT 400
@@ -415,7 +415,7 @@ never sees it. **The seed does nothing** — re-running draws a different sample
 
 So `cache/dev_d.rds` and `cache/loc_d.rds` are not a cache of a reproducible
 draw. They are the only record of which filings every number here refers to.
-**Do not delete them, and do not re-run `011a` expecting the same sample.**
+**Do not delete them, and do not re-run `legacy/draw-filing-sample` expecting the same sample.**
 
 For future sampling, hash server-side instead:
 
@@ -610,7 +610,7 @@ only between statements. The string therefore cannot be used as a boundary
 signal at all. Same for the notes reference, the page number and "(continued)",
 and XBRL-rendered filings carry the viewer's JavaScript at the top of the block.
 
-`011e` strips all of it. Measured on 1,412 blocks: 2,938 furniture lines across
+`legacy/export-chunk-text-approach-a` strips all of it. Measured on 1,412 blocks: 2,938 furniture lines across
 1,084 blocks (77%), the back-link alone in 560 blocks with 16% of its
 occurrences mid-block. Safety check on the same data: **zero** furniture lines
 carried a figure with a comma or a dollar sign. The patterns are anchored to
@@ -638,11 +638,11 @@ Every one of these came from a block Matt read and rejected.
 Three signals: a flexible title match, a terminal marker, and **numeric density
 to rank the survivors**, with completeness as a ranking preference rather than a
 gate. The stated rationale was that ranking only had to be cheap, because a
-validate-and-retry loop in `011e` would walk down the ranks until the block
+validate-and-retry loop in `legacy/export-chunk-text-approach-a` would walk down the ranks until the block
 really was a statement — so the sort was tuned for *size*, to keep the API bill
 down.
 
-Both halves of that failed. `011e`'s validator was later loosened and the retry
+Both halves of that failed. `legacy/export-chunk-text-approach-a`'s validator was later loosened and the retry
 loop stopped firing, so nothing caught the bad picks; and gating on completeness
 had been rejected for costing "15–30 points of coverage" against a completeness
 test that could not see a tail, which made the coverage it was protecting partly
@@ -721,14 +721,14 @@ no tokens spent.
 The extraction scripts are also unrun, and more weakly checked than the rest of
 this folder:
 
-- `011e-export-chunk-text.R` HAS now been run (latest: 2026-11-17, after the
+- `legacy/export-chunk-text-approach-a.R` HAS now been run (latest: 2026-11-17, after the
   locator rewrite): 1,422 of 1,425 filing x statement slots resolved to a
   block. Fewer slots than the old design offered (1,491) because the structural
   test refuses to emit a span that is missing a landmark, where the old one
-  emitted a fragment and scored it complete. `011e` also now strips page
+  emitted a fragment and scored it complete. `legacy/export-chunk-text-approach-a` also now strips page
   furniture from the text — see the method section. The
   base64 transport works. 3 are unresolved, all income statements in 10-Qs.
-- `012a-extract-statements.py` has **never been run or even syntax-checked**: there is no
+- `legacy/extract-statements.py` has **never been run or even syntax-checked**: there is no
   Python interpreter installed on this machine (`python` resolves to the
   Windows Store stub). Expect to fix a typo or two on first run. `estimate`
   needs no API key, so it is the cheapest way to shake those out.
@@ -768,14 +768,14 @@ failures, and the Compustat screen removes them.
 
 ---
 
-## Approach C: cut the statements apart at their page headers (`011h` + `011i`)
+## Approach C: cut the statements apart at their page headers (`001e` + `001f`)
 
 Three locators now exist for the same job and all three are live. **A** is
-`011d`: search the whole filing once per statement, require that statement's
-full structure, use adjacency as a tiebreak. **B** is `011f-locate-anchored.R`:
+`legacy/build-rank-candidates`: search the whole filing once per statement, require that statement's
+full structure, use adjacency as a tiebreak. **B** is `001d-locate-anchored.R`:
 find the cash flow statement under strict rules, then bracket a section around
 it and look for the other two inside with the requirements relaxed. **C** is
-`011i`, below, and it is the one that works best.
+`001f`, below, and it is the one that works best.
 
 **The page-header invariant.** Every statement page prints the same six things
 within about twenty lines: a page number, the company name, the statement
@@ -794,13 +794,13 @@ six numeric lines below it is rejected.
 ### Four fixes from four filings, 2026-11-18
 
 Every one came from a single filing that broke the obvious version. The case is
-named in the comment beside each rule in `011i`; do not simplify without
+named in the comment beside each rule in `001f`; do not simplify without
 reading it.
 
 | fix | the filing that exposed it |
 |---|---|
-| the crowding test counted **grep rows, not distinct titles** — and 011h greps joined line pairs, so one title counts twice. Any second title within the window then rejected both | **D.R. Horton** Q3 2006. A textbook balance sheet header at line 191, killed by an exhibit-index line, "Statement of Computation of Ratio of Earnings to Fixed Charges", sitting exactly 20 lines above it |
-| run selection preferred the run **nearest** the anchor. Some run is always nearest, and nothing checked the anchor was in it | **CIK 72207** 2007. 011f's anchor landed at 2861–2919, the statements are at 166–781, and a junk run was a thousand lines closer. The right run won only because the junk run was below `RUN_MIN` |
+| the crowding test counted **grep rows, not distinct titles** — and 001e greps joined line pairs, so one title counts twice. Any second title within the window then rejected both | **D.R. Horton** Q3 2006. A textbook balance sheet header at line 191, killed by an exhibit-index line, "Statement of Computation of Ratio of Earnings to Fixed Charges", sitting exactly 20 lines above it |
+| run selection preferred the run **nearest** the anchor. Some run is always nearest, and nothing checked the anchor was in it | **CIK 72207** 2007. 001d's anchor landed at 2861–2919, the statements are at 166–781, and a junk run was a thousand lines closer. The right run won only because the junk run was below `RUN_MIN` |
 | `Income Statements` — the noun first, no "of" anywhere | **DuPont** Q2 2004 |
 | `Cashflows` as one word | **Norwood Financial** Q3 2002. The most alarming of the four: the cash flow statement, invisible for want of a space |
 
@@ -901,7 +901,7 @@ the locator returned something for. A filing that came back empty is a miss.
 
 **The holdout is the number to trust.** Every fix above was derived from a
 filing inside the original 500, and six of the eleven cases sit in the half
-that was meant to be held out, so that sample's figure is fitted. `011j` draws
+that was meant to be held out, so that sample's figure is fitted. `001i` draws
 a fresh 500 excluding the original one; see "Running a second sample" below.
 
 **Coverage is no longer the thing header work moves.** It has come back exactly
@@ -920,26 +920,26 @@ errors before (3 of 10 wrong under B). No extraction has ever run.
 
 ### Running a second sample without destroying the first
 
-`011b`, `011c`, `011f`, `011h` and `011i` all take **`PILOT`**, an environment
+`001b`, `001c`, `001d`, `001e` and `001f` all take **`PILOT`**, an environment
 variable naming the cache directory under `SEC_DATA_PATH`; it defaults to
 `pilot-2026-11`. Without it a second run overwrites `dev_d.rds` and
 `loc_d.rds`, which are the only record of which filings every number in this
 file refers to and cannot be regenerated.
 
 ```sh
-Rscript 011j-draw-holdout-sample.R                 # writes holdout-2026-11/
+Rscript 001i-draw-holdout-sample.R                 # writes holdout-2026-11/
 export PILOT=holdout-2026-11
-Rscript 011b-scan-statement-markers.R              # remote, ~25 min
-Rscript 011c-map-numeric-lines.R                   # remote
-Rscript 011f-locate-anchored.R                     # the cash flow anchors
-Rscript 011h-scan-page-headers.R                   # remote, ~26 min
-Rscript 011i-locate-by-page-headers.R
+Rscript 001b-scan-statement-markers.R              # remote, ~25 min
+Rscript 001c-map-numeric-lines.R                   # remote
+Rscript 001d-locate-anchored.R                     # the cash flow anchors
+Rscript 001e-scan-page-headers.R                   # remote, ~26 min
+Rscript 001f-locate-by-page-headers.R
 ```
 
-`011f` skips its comparison with `011d` when there is no `pick9.rds`, so a
-fresh sample does not need `011d` run first.
+`001d` skips its comparison with `legacy/build-rank-candidates` when there is no `pick9.rds`, so a
+fresh sample does not need `legacy/build-rank-candidates` run first.
 
-**`011h` scans the whole sample, not `011f`'s picks.** It used to read
+**`001e` scans the whole sample, not `001d`'s picks.** It used to read
 `pick_anch.rds`, which meant C only ever saw filings where B had already found
 a cash flow statement — 22 of the holdout's 500 were never scanned at all and
 could not be located by any means. C does not need B any more: window placement
@@ -949,11 +949,11 @@ uses title spans and run selection falls back to counting distinct kinds.
 
 ## Known remaining defects
 
-- **Two files are called `011f`.** `011f-export-for-review.pl` (the review
-  exporter, documented below) and `011f-locate-anchored.R` (approach B, added
-  2026-11-17). The letters are supposed to run in execution order, so one of
-  them should be renamed; left alone for now because both are referred to by
-  letter in working notes.
+- ~~**Two files are called `011f`.**~~ **FIXED 2026-11-19** by the renumbering:
+  the review exporter is now `001j-export-for-review.pl` (validation, so it
+  sorts last) and approach B is `001d-locate-anchored.R`. Working notes written
+  before that date use the old `010`/`011`/`012` numbers; the mapping is in
+  *Scripts in this folder*.
 
 - Income statement is still weakest on every measure: located for 82.8% of
   filings against 91.2% cash flow and 91.4% balance sheet, and complete on
@@ -1055,7 +1055,7 @@ strings. Three things therefore happen downstream, not in the model:
 
 1. **Count check** — every row's values must be as long as `columns`. A
    four-column statement with a two-value row is caught immediately instead of
-   silently mis-assigned. `012a` records this as `n_bad_rows`.
+   silently mis-assigned. `legacy/extract-statements` records this as `n_bad_rows`.
 2. **Period assignment** — parse "Nine Months Ended September 30, 2022".
 3. **Column selection** — keep year-to-date, drop quarter-to-date, by label.
 
@@ -1073,7 +1073,7 @@ must go. That is exactly the wrong division of labour: it is arithmetic on
 numbers that may have been misread, performed where we cannot check it.
 
 So the contract, added 2026-11-17: the model **fills from the left, pads with
-null, and sets `u` true** on that row. Placement happens in `012b` by footing,
+null, and sets `u` true** on that row. Placement happens in `001h` by footing,
 against the printed subtotal, and only where **exactly one** arrangement foots
 every column. A tie leaves the row flagged, because a guess that cannot be
 checked is worse than a flag that can.
@@ -1119,7 +1119,7 @@ written:**
   is nearer 5,000 than 4,000.
 - **Haiku 5.5 thinks by default, at effort `medium`, and thinking tokens are
   billed as output.** Output is 79% of the bill. The 3,000-output figure
-  assumes no thinking at all. `012a` sends `output_config: {"effort": "low"}`
+  assumes no thinking at all. `legacy/extract-statements` sends `output_config: {"effort": "low"}`
   for this reason — a bigger cost lever than the choice of model, and one that
   was not in the table below. Do not raise effort without re-measuring.
 
@@ -1199,7 +1199,7 @@ contain restatement language.
 ## Keeping this updatable: the ledger
 
 **SUPERSEDED, 2026-11-19.** The inventory plus per-person append-only logs
-(`010` / `010b`) does this job, in parquet and CSV that everything else already
+(`001a` / `000`) does this job, in parquet and CSV that everything else already
 reads, so the separate SQLite ledger below was not built. Two parts of the
 design below still apply and were carried over: status must be recorded per
 filing before extraction scales, not retro-fitted, and a row needs to record
@@ -1208,7 +1208,7 @@ the reasoning.
 
 
 Everything below is the original design;
-`012d-build-ledger.R` is the script that would have done it.
+`001-ledger-build-ledger.R` is the script that would have done it.
 
 ### Why this is needed before scaling
 
@@ -1253,7 +1253,7 @@ CREATE TABLE filings (            -- one row per filing
   fdate       TEXT, rdate TEXT,   -- filed date, period end
   fy          INTEGER, fq INTEGER,
   scan_status TEXT,               -- pending | scanned | failed
-  scan_ver    TEXT,               -- rules version of 011b
+  scan_ver    TEXT,               -- rules version of 001b
   scanned_at  TEXT
 );
 
@@ -1262,7 +1262,7 @@ CREATE TABLE statements (         -- one row per filing x statement
   start       INTEGER, end INTEGER, len INTEGER,
   titled      INTEGER, nreq INTEGER, dens REAL,
   locate_status TEXT,             -- pending | located | not_found | ambiguous
-  locate_ver  TEXT,               -- rules version of 011c
+  locate_ver  TEXT,               -- rules version of 001c
   text_sha    TEXT,               -- hash of the pulled text
   ext_status  TEXT,               -- pending | submitted | succeeded | failed | stale
   prompt_ver  TEXT,               -- hash of system-prompt.txt + output-schema.json
@@ -1299,12 +1299,12 @@ resumable. Interrupt any step and re-run it; it picks up where it stopped.
 1. INSERT new filings:  wrds_forms rows with form in (10-K,10-Q,...)
                         and fdate > the ledger's max, not already present
                         -> scan_status = 'pending'
-2. 011b marker scan     WHERE scan_status = 'pending'
-3. 011c selection       -> statements rows, locate_status located / not_found
-4. 011e export text     WHERE locate_status='located' AND ext_status='pending'
+2. 001b marker scan     WHERE scan_status = 'pending'
+3. 001c selection       -> statements rows, locate_status located / not_found
+4. legacy/export-chunk-text-approach-a export text     WHERE locate_status='located' AND ext_status='pending'
                            -> also sets text_sha
-5. 012a submit          same filter; writes batch_id, ext_status='submitted'
-6. 012a fetch           WHERE ext_status='submitted'
+5. legacy/extract-statements submit          same filter; writes batch_id, ext_status='submitted'
+6. legacy/extract-statements fetch           WHERE ext_status='submitted'
                            -> 'succeeded' / 'failed', usage, diagnostics
                            -> rows appended to parquet, partitioned by fy
 7. validation           WHERE ext_status='succeeded' AND val_status='unchecked'
@@ -1346,71 +1346,74 @@ cheapest available measure of extraction error.
 
 ## Scripts in this folder
 
-**Numbering convention, matching `Code/` in the parent repo: the number is the
-step, the letter is the substep, and the letters run in dependency order.**
+**One step, lettered in run order.** This folder is step `001` of the project —
+the first major stage — and the letters say what to run and when. Renumbered
+2026-11-19 from the old `010`/`011`/`012` scheme, which had grown two files
+called `011f` and gave letters to superseded approaches.
 
-| step | what it does |
+`000-` is sourced, not run in sequence, matching `Code/000-utilities-functions.R`
+in the parent repo. Superseded approaches live in `legacy/` with their numbers
+dropped, again matching `Code/legacy/`. Anything that is not part of the chain
+has no number and lives in `diagnostics/`.
+
+A bare `001x` in this file always means a script **in this folder**. The XBRL
+pipeline in `Code/` also numbers its scripts `001a`, `001b`, `001c`, so
+references to that track are always written with the `Code/` prefix.
+
+**Run every one of these from the repo root**, so `.Renviron` loads.
+
+| script | runs | does |
+|---|---|---|
+| `000-inventory-helpers.R` | sourced | `inv()`, `inv_todo()`, `inv_log()`, `inv_progress()` — claim a batch and record it without two people writing the same file |
+| `001a-build-filing-inventory.R` | on demand | every annual/quarterly report since 2002 from `wrdssec.wrds_forms` + `wrds_forms_reg`; screens as columns; assigns filings by CIK; derives status from the per-person logs → `inventory/filing_inventory.parquet` |
+| `001b-scan-statement-markers.R` | yes | one remote grep per filing: every title, section heading, subtotal, roll-forward, scale and restatement-caption line, with line numbers → `markers4_raw.rds` |
+| `001c-map-numeric-lines.R` | yes | line numbers of every numeric line per filing → `numlines.rds` |
+| `001d-locate-anchored.R` | yes | **approach B.** Finds the cash flow statement standalone, brackets a section around it, locates the other two inside with the requirements relaxed → `chunks_anch.rds`, `pick_anch.rds`. Kept because it is still the source of the cash flow **anchor** that `001f` ranks runs against |
+| `001e-scan-page-headers.R` | yes | second remote grep, on **joined line pairs** so a title split mid-phrase matches whole: titles, period headers, column dates, scale, company names, contents markers → `markers_hdr.rds` |
+| `001f-locate-by-page-headers.R` | yes | **approach C, the one in use.** Cuts each statement from its page header to the next, falls back to a title-span window so no filing ships short → `chunks_hdr.rds` |
+| `001g-export-chunk-text.R` | yes | pulls the located text off WRDS and ships every passing candidate plus rank 1, both company names attached, so the model chooses rather than the regex. `IN_CHUNKS` selects `chunks_anch.rds` or `chunks_hdr.rds` |
+| `001h-build-tidy-frame.R` | yes, on test data | one row per filing × statement × line × period, amounts in **actual dollars** → `scf_text_lines.parquet` + the footing check |
+| `001i-draw-holdout-sample.R` | on demand | draws a fresh validation sample excluding the original one, into its own `PILOT` cache directory |
+| `001j-export-for-review.pl` | on demand | **validation.** Writes the located text as human-readable `.txt` with an index, one file per filing × statement |
+
+Not written yet, in the order they are needed:
+
+| | |
 |---|---|
-| **010** | build the inventory of filings, and track who has collected what |
-| **011** | locate the printed statement inside a filing's text |
-| **012** | turn that text into structured rows |
+| wiring `001g` to the inventory | read `inv_todo("collect")`, write chunk text to parquet by year, call `inv_log()`. The next build |
+| the step-3 extraction | done **in harness**, in batches. No script; the prompt files below are the reference |
+| the comparison | mostly `Code/001a-extract-scf-lines-and-changes.R` already — map `001h`'s output onto its `scf_lines_parts/` shape |
+| a validation substep for `001h` | hand-check the tidy frame against filings |
 
-Validation substeps come last within their step (`011f`, `012c`). Anything that
-is not a step has no number and lives in `diagnostics/`.
+### `legacy/` — superseded, kept for reference, not run
 
-### Step 010 — the inventory and the work ledger
-
-| script | runs | does |
+| script | was | why it is here |
 |---|---|---|
-| `010-build-filing-inventory.R` | on demand | queries `wrdssec.wrds_forms` + `wrds_forms_reg` for every annual/quarterly report since 2002; screens as columns; assigns filings to people by CIK; derives collection status from the per-person logs → `inventory/filing_inventory.parquet` |
-| `010b-inventory-helpers.R` | sourced | `inv()`, `inv_todo()`, `inv_log()`, `inv_progress()` — claim a batch and record it without two people writing the same file |
+| `legacy/draw-filing-sample.R` | `011a` | drew the original 500-filing sample and probed heading coverage. **Saved nothing** — see the orphan warning below. The inventory replaces it |
+| `legacy/build-rank-candidates.R` | `011d` | **approach A.** Brackets each statement top-to-bottom over the whole filing, requires its full structure, picks the adjacent triple → `chunks8.rds`, `pick9.rds`. Replaced by approach C |
+| `legacy/export-chunk-text-approach-a.R` | `011e` | exported approach A's chosen text → `extract/chunks.jsonl`. Replaced by `001g` |
+| `legacy/extract-statements.py` | `012a` | the paid Batch API runner: `estimate` / `submit` / `status` / `fetch`. **Never run, and the route was dropped** — extraction is done in harness (Matt, 2026-11-19). Kept because its cost estimator and its handling of the output schema are the reference if that ever changes |
 
-Re-run `010` whenever you want the inventory to reflect the logs. The logs are
-the record; the parquet is a cached join of them, and deleting it loses
-nothing.
+### Dependencies worth knowing
 
-### Step 011 — locate the statement
+`001b` and `001c` are independent of each other and both feed the locators.
+**`001c` is not optional** — the figures requirement and the contents-list test
+both read `numlines.rds`.
 
-| script | runs | does |
-|---|---|---|
-| `011a-draw-filing-sample.R` | once | draws the 500-filing sample and probes heading coverage — **saves nothing, see the orphan warning below** |
-| `011b-scan-statement-markers.R` | yes | one remote grep per filing: every title, section heading, subtotal, roll-forward, scale and restatement-caption line, with line numbers → `markers4_raw.rds` |
-| `011c-map-numeric-lines.R` | yes | line numbers of every numeric line per filing → `numlines.rds` |
-| `011d-build-rank-candidates.R` | yes | brackets each statement top-to-bottom, requires its full structure, picks the adjacent triple → `chunks8.rds` (all candidates, ranked) + `pick9.rds` (rank 1) |
-| `011e-export-chunk-text.R` | yes | pulls the chosen text off WRDS, strips page furniture → **`extract/chunks.jsonl`**, the handoff to step 012 |
-| `011f-export-for-review.pl` | on demand | **VALIDATION.** Writes the located text as human-readable `.txt` with an index, one file per filing × statement |
-| `011f-locate-anchored.R` | yes | **approach B.** Finds the cash flow statement standalone, brackets a section around it, locates the other two inside with the requirements relaxed → `chunks_anch.rds`, `pick_anch.rds`. Still the source of the cash flow **anchor** that `011i` ranks against |
-| `011g-export-all-candidates.R` | yes | ships **every** passing candidate plus rank 1, both company names attached, so the model chooses rather than the regex. `IN_CHUNKS` selects `chunks_anch.rds` or `chunks_hdr.rds` |
-| `011h-scan-page-headers.R` | yes | second remote grep, on **joined line pairs** so a title split mid-phrase matches whole: titles, period headers, column dates, scale, company names, contents markers → `markers_hdr.rds` |
-| `011i-locate-by-page-headers.R` | yes | **approach C,** the one that works best. Cuts each statement from its page header to the next, falls back to a title-span window so no filing ships short → `chunks_hdr.rds` |
-| `011j-draw-holdout-sample.R` | on demand | draws a fresh sample excluding the original one, into its own `PILOT` cache directory |
-
-`011b` and `011c` are independent of each other; both feed `011d`. **`011d`
-needs `numlines.rds`**, not just for diagnostics — the figures requirement and
-the contents-list test both read it, so `011c` is not optional.
-
-Changing a pattern in `011b` means re-running `011b` (about 4 minutes for 500
-filings, it is a remote grep) before `011d` will see it. `011b` refuses to save
-if it finds markers for fewer than half the filings it asked about, because it
-used to overwrite a good cache with an empty one when a pattern broke.
-
-### Step 012 — extract the numbers
-
-| script | runs | does |
-|---|---|---|
-| `012a-extract-statements.py` | **never run** | Batch API runner: `estimate` / `submit` / `status` / `fetch` → `extract/extracted.jsonl` |
-| `012b-build-tidy-frame.R` | yes, on test data | one row per filing × statement × line × period, amounts in **actual dollars** → `scf_text_lines.parquet` + the footing check |
-| `012c-validate-tidy-frame.R` | — | **not written.** The hand-validation substep |
-| `012d-build-ledger.R` | — | **not written.** The inventory/update design in the ledger section above |
+Changing a pattern in `001b` or `001e` means re-running it (about 4 minutes for
+500 filings; it is a remote grep) before a locator will see the change. `001b`
+refuses to save if it finds markers for fewer than half the filings it asked
+about, because it used to overwrite a good cache with an empty one when a
+pattern broke.
 
 Supporting files, not steps:
 
 | file | does |
 |---|---|
-| `prompt/system-prompt.txt` | the instructions actually sent to the model |
+| `prompt/system-prompt.txt` | the instructions sent to the model |
 | `prompt/output-schema.json` | the schema the response is constrained to |
 | `prompt/DESIGN.md` | why the prompt is shaped this way — **read before changing either of the above.** Written before the Nov 2026 prompt revision, so it predates the column-object format, the per-row `x` flag and the precision-is-not-a-multiplier rule |
-| `requirements.txt` | `pip install -U anthropic` |
+| `requirements.txt` | `pip install -U anthropic`. Only the dropped Python route needs it |
 
 ### `diagnostics/` — not part of any step
 
@@ -1440,16 +1443,16 @@ nothing in this repo writes them:
 
 | orphan | read by | what it is |
 |---|---|---|
-| `dev_d.rds`, `loc_d.rds` | `011b` | the 500-filing sample, dev and held-out |
-| `markers3.rds` | `011c` | an earlier marker pass |
+| `dev_d.rds`, `loc_d.rds` | `001b` | the 500-filing sample, dev and held-out |
+| `markers3.rds` | `001c` | an earlier marker pass |
 
-They were written in interactive sessions that no longer exist. `011a` draws a
+They were written in interactive sessions that no longer exist. `legacy/draw-filing-sample` draws a
 sample but saves nothing, so re-running it does not regenerate them, and
 `set.seed(42)` does not make the draw reproducible because the surrounding query
 has changed. **Do not delete these three files.** Rebuilding the chain from
 nothing means first writing the two steps that produce them.
 
-`011c-map-numeric-lines.R` is the most reusable piece: it returns the position of
+`001c-map-numeric-lines.R` is the most reusable piece: it returns the position of
 every numeric line per filing, which lets **any** boundary rule be scored
 locally with no further SSH. Re-tuning boundaries does not require going back to
 the server.
@@ -1466,7 +1469,7 @@ the server.
 | `numlines.rds` | numeric line positions, 499 filings |
 | `bytes.rds` | measured characters per chosen chunk |
 | `yearorder.rds` | column order / period years per cash-flow chunk |
-| `chunktext.rds` | the pulled chunk text, written by `011e` (not yet run) |
+| `chunktext.rds` | the pulled chunk text, written by `legacy/export-chunk-text-approach-a` (not yet run) |
 | `scored3.rds` | Compustat anchor scores |
 | `gaps.rds`, `fails2.rds` | coverage failures with diagnosed causes |
 | `headings.rds`, `neigh.rds`, `anchor2.rds` | superseded adjacency / anchor approaches |
@@ -1482,16 +1485,16 @@ the server.
   and the remote shell executes part of the regex. Always pass
   `shQuote(x, type = "sh")`.
   The failure is silent and total: grep matched nothing for all 500 filings,
-  `011b` wrote an empty marker file over the good one, and it surfaced two
+  `001b` wrote an empty marker file over the good one, and it surfaced two
   scripts later as "0 rows" with no error to trace. It had worked for months
   only because no pattern had ever contained `$(`. Adding one character class
-  (`[0-9$(]`) was enough to break it. `011b` now refuses to save a collapsed
+  (`[0-9$(]`) was enough to break it. `001b` now refuses to save a collapsed
   result, and orders that class `[0-9($]` as well.
 - **`scp_upload` fails against `~`** on WRDS Cloud ("No such file or directory"
   — the tilde is not expanded). Stream input lists through a quoted heredoc to
   `/tmp/` instead. Every script here does that.
 - **A single SSH exec over more than a few hundred filings gets disconnected.**
-  Batch and reconnect per batch, with a retry (`diagnostics/score-chunks.R`, `011c`, `diagnostics/measure-token-size.R`).
+  Batch and reconnect per batch, with a retry (`diagnostics/score-chunks.R`, `001c`, `diagnostics/measure-token-size.R`).
 - **Write R scripts containing backslashes with a file-writing tool, not a bash
   heredoc.** A heredoc eats one level: `"\\.parquet$"` arrives as
   `"\.parquet$"`, silently breaking the regex.
@@ -1513,14 +1516,14 @@ the server.
 Rewritten 2026-11-19, after step 1 was built and the API route was dropped.
 In order of value.
 
-1. **Wire step 2 to the inventory.** `011g` currently takes a sample frame; it
+1. **Wire step 2 to the inventory.** `001g` currently takes a sample frame; it
    should take `inv_todo("collect")`, write the chunk text to parquet
    partitioned by year, and call `inv_log()`. That is the only thing standing
    between the inventory and collection running at scale. Nothing else here is
    blocked on money or on an API key.
 2. **A definition of revision vs reclassification.** Free to work on now, and
    the item most likely to be expensive if deferred — see *The research-design
-   question nobody has addressed*. The other track's `001b` already carries a
+   question nobody has addressed*. The XBRL track's `Code/001b` already carries a
    working version of this (five standards, windows set from observed spikes,
    plus a rule that a disclosed amendment always beats attribution), so this is
    adaptation rather than invention.
@@ -1537,7 +1540,7 @@ In order of value.
 6. **The co-registrant problem.** A co-filed submission holds two registrants'
    statements in one chunk (`n_registrant_rows > 1`, 12,963 accessions). Which
    set belongs to which CIK is unresolved, and it is the International
-   Bancshares / United Airlines failure in `011i`.
+   Bancshares / United Airlines failure in `001f`.
 7. **Restatement reconciliation tables** as a free self-labelling validation
    set — ~6% of blocks contain "previously reported" / "as restated".
 8. **The Audit Analytics baseline** — counts by year, SCF-affecting, Big R vs
@@ -1547,8 +1550,8 @@ In order of value.
 10. Implement auditor-report proximity as a filter.
 
 **Dropped:** the paid Batch API pilot. Extraction is done in harness (Matt,
-2026-11-19). `012a-extract-statements.py` and the cost projections are kept for
-reference. Also dropped: the separate `012d-build-ledger.R` SQLite design — the
+2026-11-19). `legacy/extract-statements.py` and the cost projections are kept for
+reference. Also dropped: the separate `001-ledger-build-ledger.R` SQLite design — the
 inventory plus per-person logs does that job, in the format everything else
 already reads.
 

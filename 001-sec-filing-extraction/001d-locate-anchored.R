@@ -1,14 +1,16 @@
 ## ============================================================================
-## 011f  LOCATE BY ANCHORING ON THE CASH FLOW STATEMENT
-##                                          step 011 (locate), substep f
-## An ALTERNATIVE to 011d, not a successor. 011d stays in the chain and is
+## 001d  LOCATE BY ANCHORING ON THE CASH FLOW STATEMENT
+##                                          step 001, substep d
+## An ALTERNATIVE to legacy/build-rank-candidates, not a successor. legacy/build-rank-candidates stays in the chain and is
 ## untouched; this script writes its own outputs so the two can be compared
 ## filing by filing.
-## In : cache/markers4_raw.rds (011b), cache/numlines.rds (011c)
+## In : cache/markers4_raw.rds (001b), cache/numlines.rds (001c)
 ## Out: cache/chunks_anch.rds (candidates), cache/pick_anch.rds (rank 1),
-##      cache/anch_vs_011d.rds (the filing-level comparison)
+##      cache/anch_vs_011d.rds (the filing-level comparison). The "011d" in that
+##      filename is the OLD number for legacy/build-rank-candidates.R; the data
+##      file keeps its name so existing copies still read.
 ## ============================================================================
-## WHY (Matt, 2026-11-17). 011d searches the whole filing three times, once per
+## WHY (Matt, 2026-11-17). legacy/build-rank-candidates searches the whole filing three times, once per
 ## statement, and uses adjacency only as a TIEBREAK that quality tier dominates.
 ## That cannot be fixed by reweighting, because the failure is not that the
 ## right block was outranked - it is that the right block was never a candidate.
@@ -21,11 +23,11 @@
 ##     shareholder's equity    ~3972-4058     page 80
 ##     statements of cash flows 4070-4228     page 81
 ##
-## 011d found the balance sheet and the cash flow statement and then chose, as
+## legacy/build-rank-candidates found the balance sheet and the cash flow statement and then chose, as
 ## the income statement, the unaudited QUARTERLY RESULTS footnote at 6787 -
 ## 2,717 lines away. Not because it scored better on adjacency but because the
 ## real income statement produced NO CANDIDATE AT ALL: Biomet is wholly owned
-## by LVB Acquisition, so it reports no EPS, and EPS is 011d's only close
+## by LVB Acquisition, so it reports no EPS, and EPS is legacy/build-rank-candidates's only close
 ## marker for an income statement. The statement ends at "Net loss".
 ##
 ## Measured: 22 of 498 pilot filings have no EPS near any income statement
@@ -36,7 +38,7 @@
 ## Biomet and First Data both carry a CRSP link from their public era.
 ##
 ## THE IDEA. Anchoring does not just move adjacency up the priority order - it
-## lets us ASK FOR LESS EVIDENCE. 011d has to demand a title AND a top landmark
+## lets us ASK FOR LESS EVIDENCE. legacy/build-rank-candidates has to demand a title AND a top landmark
 ## AND a bottom landmark, because the block could be anywhere in 15,000 lines.
 ## Inside a 200-line window after a confirmed cash flow statement, "title +
 ## revenue line + net income" is overwhelming, because there is nothing else it
@@ -67,13 +69,13 @@
 ## next separator. That is structural rather than a number I picked, it needs
 ## no close marker, and it is therefore what makes the no-EPS case work.
 ##
-## 011e strips both of these lines as page furniture - that is correct for what
+## legacy/export-chunk-text-approach-a strips both of these lines as page furniture - that is correct for what
 ## gets sent to the model and wrong as a reason not to USE them for boundaries.
 ##
-## THE COST, which is real and is why 011d stays. All three picks come to share
+## THE COST, which is real and is why legacy/build-rank-candidates stays. All three picks come to share
 ## one point of failure. Today three picks 10,000 lines apart is a SIGNAL that
 ## something broke, and it is how Biomet was caught; anchor them and the triple
-## always looks plausible. So this script reports its disagreements with 011d
+## always looks plausible. So this script reports its disagreements with legacy/build-rank-candidates
 ## rather than replacing it, and that comparison is free - no API calls.
 ## ============================================================================
 PILOT <- Sys.getenv("PILOT", "pilot-2026-11")
@@ -82,8 +84,8 @@ M   <- readRDS(paste0(SP, "markers4_raw.rds"))
 NUM <- readRDS(paste0(SP, "numlines.rds"))
 t <- M$text
 
-## ---- flags: identical to 011d, plus the two separator flags --------------
-## Deliberately copied rather than factored out. 011d is validated against
+## ---- flags: identical to legacy/build-rank-candidates, plus the two separator flags --------------
+## Deliberately copied rather than factored out. legacy/build-rank-candidates is validated against
 ## five rounds of hand audit and must not be edited to support an experiment.
 PROSE <- paste0(
   "(^|[[:space:]])(we|our|us|their|its|these|those|have|has|had|been|was|were",
@@ -173,7 +175,7 @@ TITLE_REACH <- 250; CLOSE_GAP <- 40; RECON_HEAD <- 25
 NUM_WITHIN <- 40; NUM_MIN_AT_TOP <- 3; TITLE_CROWD <- 3; CROWD_WINDOW <- 45
 FLOOR_SLACK <- 3; NNUM_MIN <- 8
 ## How far the statements SECTION may reach above and below the cash flow
-## anchor. Measured on 011d's own picks, the income statement sits a median
+## anchor. Measured on legacy/build-rank-candidates's own picks, the income statement sits a median
 ## 242 lines from the cash flow statement and the balance sheet 283, with 80%
 ## of each inside 800. 1200 is deliberately generous: inside the section the
 ## structural test is relaxed, so the section wants to be big enough to hold
@@ -216,7 +218,7 @@ OTHER_CLOSE <- list(cf = c("is_eps","bs_tle","bs_teq"),
                     bs = c("cf_end","is_eps"))
 
 ## ---- span builder --------------------------------------------------------
-## Same bracketing as 011d, with one addition: a span may close at the next
+## Same bracketing as legacy/build-rank-candidates, with one addition: a span may close at the next
 ## SEPARATOR as well as at a close marker. That is what removes the dependence
 ## on EPS and on a labelled total.
 ## PAGE BREAKS DO NOT CLOSE A STATEMENT, and the separator is a FALLBACK.
@@ -230,10 +232,10 @@ OTHER_CLOSE <- list(cf = c("is_eps","bs_tle","bs_teq"),
 ##     Biomet's fits on one page, which is why the case did not show it.
 ##  2. preferring a separator over the real close marker moved almost every
 ##     boundary by a few lines for no gain, which buried the real differences
-##     with 011d in noise (405 of 492 cash flow picks read as DIFFERENT at a
+##     with legacy/build-rank-candidates in noise (405 of 492 cash flow picks read as DIFFERENT at a
 ##     median of 11 lines).
 ##
-## So: the close marker first, exactly as 011d finds it, and the notes
+## So: the close marker first, exactly as legacy/build-rank-candidates finds it, and the notes
 ## reference only when there is no close marker at all. That is the no-EPS
 ## case and nothing else, which is the whole point - every pick that already
 ## worked is left alone.
@@ -261,8 +263,8 @@ build_span <- function(x, ty, S0, lo, hi, req, nv, ttl_any, own, seps, sep_close
       ## LAST RESORT, BALANCE SHEET ONLY. United Continental labels no total on
       ## either page - both end on a bare "$ 37,353" - so there is no line to
       ## find and the statement simply runs to wherever the next one begins.
-      ## 011d has this rule; dropping it from 011f is why United produced no
-      ## balance sheet at all. It was risky in 011d because it applied across
+      ## legacy/build-rank-candidates has this rule; dropping it from 001d is why United produced no
+      ## balance sheet at all. It was risky in legacy/build-rank-candidates because it applied across
       ## the whole document; here the span is already inside the section, which
       ## is what makes it safe. An unlabelled total is a balance-sheet habit,
       ## so it stays restricted to the balance sheet.
@@ -330,7 +332,7 @@ locate <- function(x) {
   sep_close <- sort(unique(x$line[x$sep]))
 
   ## STEP 1 - the cash flow anchor, strict, chosen on its own merits.
-  ## 011d picks the cash flow span jointly with the other two; here it has to
+  ## legacy/build-rank-candidates picks the cash flow span jointly with the other two; here it has to
   ## stand alone, which is what the method claims it can do.
   tc <- tops_for(x, "cf", nv, ttl_all)
   cfc <- do.call(rbind, lapply(tc$tops, function(S0)
@@ -343,7 +345,7 @@ locate <- function(x) {
   if (is.null(cfc) || !nrow(cfc)) return(NULL)
   cfc$tier <- ifelse(cfc$complete & cfc$titled, 1L, ifelse(cfc$complete, 2L, 3L))
   ## tier, then the longest - the consolidated statement over a condensed or
-  ## parent-only one, which is 011d's dead-heat rule.
+  ## parent-only one, which is legacy/build-rank-candidates's dead-heat rule.
   A <- cfc[order(cfc$tier, -cfc$len), ][1, ]
 
   ## STEP 2 - the statements SECTION around the anchor.
@@ -448,11 +450,11 @@ for (ty in c("is","bs")) {
       100*mean(d > 3000, na.rm=TRUE)))
 }
 
-## ---- COMPARISON WITH 011d, which is the point of the script --------------
-## Skipped on a sample that has not been through 011d - a fresh holdout run
+## ---- COMPARISON WITH legacy/build-rank-candidates, which is the point of the script --------------
+## Skipped on a sample that has not been through legacy/build-rank-candidates - a fresh holdout run
 ## wants the anchors, not the comparison with the older approach.
 if (!file.exists(paste0(SP, "pick9.rds"))) {
-  cat("\nno pick9.rds in", SP, "- skipping the 011d comparison\n")
+  cat("\nno pick9.rds in", SP, "- skipping the legacy/build-rank-candidates comparison\n")
   saveRDS(C,  paste0(SP, "chunks_anch.rds"))
   saveRDS(pk, paste0(SP, "pick_anch.rds"))
   cat("saved chunks_anch.rds and pick_anch.rds\n")
@@ -471,22 +473,22 @@ cmp <- merge(old[, c("wrdsfname","kind","start","end","len","complete","titled")
 ov <- with(cmp, pmin(end.old, end.new) - pmax(start.old, start.new) + 1)
 sh <- with(cmp, pmin(len.old, len.new))
 cmp$overlap <- ifelse(is.na(ov), NA_real_, pmax(0, ov) / sh)
-cmp$status <- with(cmp, ifelse(is.na(start.old) & !is.na(start.new), "011f only",
-                        ifelse(!is.na(start.old) & is.na(start.new), "011d only",
+cmp$status <- with(cmp, ifelse(is.na(start.old) & !is.na(start.new), "001d only",
+                        ifelse(!is.na(start.old) & is.na(start.new), "legacy/build-rank-candidates only",
                         ifelse(overlap >= 0.9, "same block",
                         ifelse(overlap > 0,    "same, shifted",
                                                "DIFFERENT BLOCK")))))
-cat("\n=== 011f vs 011d, per statement ===\n")
+cat("\n=== 001d vs legacy/build-rank-candidates, per statement ===\n")
 print(table(cmp$kind, cmp$status))
 cat("\n=== the disagreements that matter: non-overlapping picks ===\n")
 dd <- cmp[cmp$status == "DIFFERENT BLOCK" & !is.na(cmp$start.old), ]
 if (nrow(dd)) {
   dd$gap <- abs(dd$start.old - dd$start.new)
   print(tapply(dd$gap, dd$kind, summary))
-  cat("\nof those, how many did 011d place >3000 lines away:\n")
+  cat("\nof those, how many did legacy/build-rank-candidates place >3000 lines away:\n")
   print(table(dd$kind[dd$gap > 3000]))
   cat("\nand which side scored COMPLETE on them:\n")
-  print(table(kind = dd$kind, d011d = dd$complete.old, f011f = dd$complete.new))
+  print(table(kind = dd$kind, approachA = dd$complete.old, approachB = dd$complete.new))
 }
 cat("\n=== closes that needed the separator (the no-close-marker cases) ===\n")
 print(table(pk$kind, pk$how_end))

@@ -1,5 +1,5 @@
 ## ============================================================================
-## 011j  DRAW A FRESH HOLDOUT SAMPLE       step 011 (locate), substep j
+## 001i  DRAW A FRESH HOLDOUT SAMPLE       step 001, substep i
 ##
 ## WHY THIS EXISTS. Every locator fix through 2026-11-18 was derived from a
 ## filing inside the original 500, and six of the eleven cases sit in the half
@@ -15,14 +15,14 @@
 ##
 ## In : WRDS wrdssec.wrds_forms, plus the original sample (to exclude it)
 ## Out: {SEC_DATA_PATH}/{PILOT_OUT}/cache/dev_d.rds   the fresh sample
-##      {SEC_DATA_PATH}/{PILOT_OUT}/cache/loc_d.rds   empty, so 011b's
+##      {SEC_DATA_PATH}/{PILOT_OUT}/cache/loc_d.rds   empty, so 001b's
 ##                                                    rbind(dev, tst) still
 ##                                                    works unchanged
 ##
 ## THEN RUN, with PILOT set to the same directory:
-##   011b (content markers, remote)  ->  011c (numeric lines, remote)
-##   011f (cash flow anchors)        ->  011h (header markers, remote)
-##   011i (the locator)
+##   001b (content markers, remote)  ->  001c (numeric lines, remote)
+##   001d (cash flow anchors)        ->  001e (header markers, remote)
+##   001f (the locator)
 ##
 ## The draw is NOT reproducible, for the same reason the original was not:
 ## ORDER BY random() executes on the Postgres server, which never sees R's
@@ -70,7 +70,7 @@ cat("\nholdout sample:", nrow(d),
 cat("fdate range:", format(min(d$fdate)), "to", format(max(d$fdate)), "\n")
 cat("distinct CIKs:", length(unique(d$cik)), "\n")
 
-## 011b reads dev_d.rds and loc_d.rds and binds them with cbind(), which fails
+## 001b reads dev_d.rds and loc_d.rds and binds them with cbind(), which fails
 ## on a zero-row frame ("arguments imply differing number of rows: 0, 1"). So
 ## the sample is split in half as the original was, rather than parked entirely
 ## in dev_d with an empty loc_d.
@@ -84,4 +84,4 @@ saveRDS(d[h, keep],  paste0(OUT, "dev_d.rds"))
 saveRDS(d[-h, keep], paste0(OUT, "loc_d.rds"))
 saveRDS(d, paste0(OUT, "holdout_full.rds"))
 cat("\nwrote", paste0(OUT, "dev_d.rds"), "\n")
-cat("next:  PILOT=", PILOT_OUT, " Rscript 011b-scan-statement-markers.R\n", sep = "")
+cat("next:  PILOT=", PILOT_OUT, " Rscript 001b-scan-statement-markers.R\n", sep = "")

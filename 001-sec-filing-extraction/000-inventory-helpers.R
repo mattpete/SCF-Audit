@@ -1,11 +1,11 @@
-## 010b -- INVENTORY HELPERS
+## 000 -- INVENTORY HELPERS
 ##
-## source("011-sec-filing-extraction/010b-inventory-helpers.R")
+## source("001-sec-filing-extraction/000-inventory-helpers.R")
 ##
 ## Everything two people need to work through the inventory at the same time
 ## without stepping on each other. Four functions:
 ##
-##   inv()                  the inventory, as 010 last built it
+##   inv()                  the inventory, as 001a last built it
 ##   inv_todo(stage, n)     your next n filings that still need doing
 ##   inv_log(rows, stage)   record that you did them -- APPENDS TO YOUR FILE
 ##   inv_progress()         who has done what
@@ -17,7 +17,7 @@
 ## person's work vanishes without an error -- so this is not a style
 ## preference, it is the whole reason the logs exist.
 ##
-## Re-run 010 whenever you want the inventory to reflect the logs. The logs
+## Re-run 001a whenever you want the inventory to reflect the logs. The logs
 ## are the record; the parquet is a cached join of them.
 
 suppressPackageStartupMessages({
@@ -47,7 +47,7 @@ who_am_i <- function() {
 inv <- function() {
   p <- paste0(.sec_dir(), "/filing_inventory.parquet")
   if (!file.exists(p)) stop("No inventory at ", p,
-    " -- run 010-build-filing-inventory.R first.")
+    " -- run 001a-build-filing-inventory.R first.")
   read_parquet(p)
 }
 
@@ -72,7 +72,7 @@ inv_todo <- function(stage = c("collect", "extract"), n = 250,
 ## RECORD WHAT YOU DID. `rows` is a frame carrying at least accession and cik
 ## -- pass the frame inv_todo gave you, or a subset of it.
 ##
-## Appends; never rewrites. An accession logged twice is fine: 010 keeps the
+## Appends; never rewrites. An accession logged twice is fine: 001a keeps the
 ## latest entry per (accession, cik, stage).
 inv_log <- function(rows, stage = c("collected", "extracted"),
                     locate_how = NA_character_, n_blocks = NA_integer_,
@@ -130,7 +130,7 @@ inv_progress <- function() {
 ## ============================ Validation ============================
 if (FALSE) {
 
-  ## 1. assignment is stable: re-running 010 must not move a CIK between
+  ## 1. assignment is stable: re-running 001a must not move a CIK between
   ##    people, because it is a function of the CIK and nothing else.
   d <- inv()
   stopifnot(all(d$assigned_to ==
@@ -142,9 +142,9 @@ if (FALSE) {
     count(n)   ## must be 1 for every CIK
 
   ## 3. a round trip: claim ten, log them, rebuild, confirm they read back
-  ##    as collected. Run 010 again between the log and the check.
+  ##    as collected. Run 001a again between the log and the check.
   b <- inv_todo("collect", n = 10)
   inv_log(b, "collected", locate_how = "test", n_blocks = 3L)
-  ## source 010 here, then:
+  ## source 001a here, then:
   ## inv() |> filter(accession %in% b$accession) |> count(collected)
 }

@@ -86,14 +86,20 @@ Scope it correctly rather than caveating everything. It affects descriptive *tag
 - Open `SCF-Audit.Rproj` in RStudio and run scripts by sourcing them or executing line-by-line — there is no CLI build/lint/test entrypoint.
 - Required env vars, set in a local (gitignored) `.Renviron` at the repo root:
   - `DATA_PATH` — processed data folder (parquet outputs, taxonomy/restatement inputs)
-  - `SEC_DATA_PATH` — the filing-text extraction work in `011-sec-filing-extraction/` only (see its README). A separate OneDrive folder, deliberately not under `DATA_PATH`, so the two measurement approaches share no storage. **No trailing slash**, and those scripts must build paths with `paste0`, not `file.path`, which strips it.
-  - `SCF_WHO` — `011-sec-filing-extraction/` only. Your name in lower case (`"matt"` / `"andrew"`). Names your progress log and decides which filings are assigned to you, so two people can collect at once without writing the same file.
+  - `SEC_DATA_PATH` — the filing-text extraction work in `001-sec-filing-extraction/` only (see its README). A separate OneDrive folder, deliberately not under `DATA_PATH`, so the two measurement approaches share no storage. **No trailing slash**, and those scripts must build paths with `paste0`, not `file.path`, which strips it.
+  - `SCF_WHO` — `001-sec-filing-extraction/` only. Your name in lower case (`"matt"` / `"andrew"`). Names your progress log and decides which filings are assigned to you, so two people can collect at once without writing the same file.
   - `DROPBOX_PATH`, `XBRL_DATA_PATH` — optional, and only used by `Code/tools/sync-to-onedrive.R` to find the pre-OneDrive copies. Not needed to run the pipeline.
   - These are machine-specific (differ between personal/work computers) and never committed.
 - `Code/000-utilities-functions.R` is sourced by downstream scripts via `source("code/000-utilities-functions.R")` — run scripts from the repo root so this relative path resolves.
 - No automated tests exist. Scripts self-validate with ad hoc `filter()`/`View()` checks against known CIKs, left in place at the bottom of each script under headers like `# Validation` or `# SCRATCH`. These are exploratory, not meant to run unattended as part of the pipeline.
 
 ## Architecture
+
+**Two folders now both use `001`.** A bare script number in this file — `001a`,
+`001b`, `002a` — always means `Code/`, the XBRL pipeline. The filing-text track's
+scripts live in `001-sec-filing-extraction/` and are always written with that
+folder in the path. They were renumbered from `011`/`012` on 2026-11-19 so that
+the folder is one step with its substeps lettered in run order.
 
 ### Data pipeline lineage
 
@@ -383,9 +389,9 @@ Two licensed exports in `DATA_PATH`, read by `002a`: `restatement-data-031425.xl
 
 A general-purpose R helper library sourced by other scripts, not specific to any one pipeline stage: variable transforms (`winsorize_x`, `truncate_x`, `standardize_x`), Fama-French 12/49 industry classification from SIC codes (`assign_FF12`, `assign_FF49`), logistic regression holdout/performance helpers built for `rsample`/`broom` workflows, LaTeX/`modelsummary` formatting helpers, and an event-study trading-day window function (`trading_day_window`). Also sets global R options (no scientific notation, `America/New_York` timezone for date handling).
 
-## Second track: statement extraction from filing text (`011-sec-filing-extraction/`)
+## Second track: statement extraction from filing text (`001-sec-filing-extraction/`)
 
-Started Nov 2026, parallel to everything above and **not** part of the `001`/`002`
+Started Nov 2026, parallel to everything above and **not** part of the `Code/001`/`Code/002`
 chain. Instead of reading XBRL tags, it pulls the cleaned text of a filing off WRDS
 Cloud, locates the printed statement, and reads the line items out of that block
 as structured rows. Matt's reason: the XBRL data is too messy for this.
@@ -404,7 +410,7 @@ fine and intended; merging the *data* is not.
 
 | | |
 |---|---|
-| Code | `011-sec-filing-extraction/` (at the repo root, not under `Code/`) |
+| Code | `001-sec-filing-extraction/` (at the repo root, not under `Code/`) |
 | Data | `SEC_DATA_PATH` — its own OneDrive folder, deliberately separate from `DATA_PATH` |
 | Source | WRDS Cloud filing text. **No EDGAR scraping** — settled, do not revisit |
 | Extra env var | `SCF_WHO` ("matt" / "andrew") — names your progress log and decides which filings are assigned to you |
@@ -414,18 +420,18 @@ so `.Renviron` loads:
 
 | step | script | state |
 |---|---|---|
-| 1 inventory | `010-build-filing-inventory.R` + `010b-inventory-helpers.R` | **built and run.** 913,756 rows, 780,364 filings to fetch, 24,065 filers |
-| 2 pull + locate | `011g` + `011h`/`011i` | locating works: 96.6% on a fresh holdout. Not yet wired to the inventory — **this is the next build** |
+| 1 inventory | `001a-build-filing-inventory.R` + `000-inventory-helpers.R` | **built and run.** 913,756 rows, 780,364 filings to fetch, 24,065 filers |
+| 2 pull + locate | `001g` + `001e`/`001f` | locating works: 96.6% on a fresh holdout. Not yet wired to the inventory — **this is the next build** |
 | 3 text → JSON | none; done in harness | run once on 10 filings: 1,890 rows, 15 of 18 cash flow columns footed |
-| 4 JSON → parquet | `012b-build-tidy-frame.R` | built; Matt verified the frame 2026-11-16 |
-| 5 find revisions | none | not started, but mostly `001a` already — map step 4's output onto `scf_lines_parts/` shape |
+| 4 JSON → parquet | `001h-build-tidy-frame.R` | built; Matt verified the frame 2026-11-16 |
+| 5 find revisions | none | not started, but mostly `Code/001a` already — map step 4's output onto `scf_lines_parts/` shape |
 
 **Extraction is done IN HARNESS, in batches — not through the paid Batch API.**
 Matt's decision 2026-11-19. Do not propose the API route or quote its cost
 unless asked.
 
 **Two people work this at once, so nobody writes a shared file.** The inventory
-is a cached join, rebuilt by re-running `010`; progress lives in append-only
+is a cached join, rebuilt by re-running `001a`; progress lives in append-only
 per-person logs at `inventory/logs/progress_{SCF_WHO}.csv`. Filings are assigned
 by CIK, so a firm is never split and assignment does not reshuffle as the
 inventory grows. Claim work with `inv_todo()`, record it with `inv_log()`.
@@ -434,7 +440,7 @@ Storage, measured: **18.6 GB raw, ~6 GB compressed** for 780,364 filings at 25.6
 KB each. Chunk text goes in parquet partitioned by year, *not* 780k loose files —
 OneDrive syncs per file and every collaborator downloads all of them.
 
-**Read `011-sec-filing-extraction/README.md` before touching any of it.** It holds
+**Read `001-sec-filing-extraction/README.md` before touching any of it.** It holds
 the measured hit rates, the parameter sweeps, the traps that pass every structural
 test (parent-only Schedule I statements, press-release exhibits, restatement
 reconciliations), the form-list and SIC traps the inventory had to settle, and the

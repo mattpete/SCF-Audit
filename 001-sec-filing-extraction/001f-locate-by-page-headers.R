@@ -1,14 +1,14 @@
 ## ============================================================================
-## 011i  LOCATE BY PAGE HEADER             step 011 (locate), substep i
+## 001f  LOCATE BY PAGE HEADER             step 001, substep f
 ## Approach C. Cuts the statements apart at their PAGE HEADERS instead of
 ## bracketing each one between its own content landmarks.
-## In : cache/markers_hdr.rds (011h), cache/numlines.rds (011c)
-## Out: cache/chunks_hdr.rds (same shape as 011f's output, so 011g exports it)
+## In : cache/markers_hdr.rds (001e), cache/numlines.rds (001c)
+## Out: cache/chunks_hdr.rds (same shape as 001d's output, so 001g exports it)
 ## ============================================================================
 ## THE IDEA IN ONE LINE: a statement runs from its own page header to the next
 ## page header, so nothing about its contents has to be findable.
 ##
-## Approaches A (011d) and B (011f) both bracket a statement between a top and
+## Approaches A (legacy/build-rank-candidates) and B (001d) both bracket a statement between a top and
 ## a bottom landmark drawn from its contents, and both keep failing on filings
 ## where those landmarks are not there to be found:
 ##
@@ -19,7 +19,7 @@
 ## Reading those filings line by line shows the top of every statement page
 ## carries the same block - company name, statement title, scale, period
 ## header, column years - and a footnote table never does. See the worked
-## examples in 011h's header. So:
+## examples in 001e's header. So:
 ##
 ##   1. A HEADER is a statement title with a PERIOD HEADER or COLUMN YEARS
 ##      close below it. The title alone is not enough: a table of contents
@@ -45,7 +45,7 @@ t <- M$text
 cat("marker rows:", nrow(M), " filings:", length(unique(M$wrdsfname)), "\n")
 
 ## ---- flags ---------------------------------------------------------------
-## Matched on JOINED line pairs by 011h, so a title split mid-phrase is whole
+## Matched on JOINED line pairs by 001e, so a title split mid-phrase is whole
 ## here. No title_like()/PROSE filter is needed to keep footnote prose out,
 ## because a title only becomes a header when a period line follows it - but
 ## it is kept anyway, since it costs nothing and removes obvious prose.
@@ -65,7 +65,7 @@ title_like <- function(t, rx) {
 F <- data.frame(
   ## The noun may come FIRST and the "of" be absent entirely - DuPont heads
   ## its page "Consolidated Income Statements (Note 1)". Matched here as well
-  ## as in 011h, since 011i reclassifies what 011h grepped.
+  ## as in 001e, since 001f reclassifies what 001e grepped.
   ## "Cashflows" is one word in Norwood Financial's 10-Q, so the space is
   ## optional on both sides of the pattern.
   ttl_cf = title_like(t, "statements? of .{0,40}cash ?flows?|cash ?flows? statements?"),
@@ -74,7 +74,7 @@ F <- data.frame(
   ttl_bs = title_like(t, "balance sheets?|statements? of .{0,40}financial (position|condition)"),
   ## Comprehensive income is its OWN statement on its OWN page - International
   ## Bancshares prints it between the income statement and the cash flow
-  ## statement, and 011f mistook it for the income statement because it was
+  ## statement, and 001d mistook it for the income statement because it was
   ## nearer the anchor. It is a separate kind here, never an income statement,
   ## EXCEPT where the title combines the two ("Statements of Operations and
   ## Comprehensive Income", SPX), which ttl_is already catches.
@@ -162,10 +162,10 @@ REQ <- list(
   is = list(rev = "is_rev", ni = "is_ni"),
   bs = list(assets = c("bs_ta", "bs_hasset", "bs_tca"),
             liab = c("bs_tle", "bs_teq", "bs_hliab")))
-## 011h's pattern set is header-focused and does not carry content markers, so
+## 001e's pattern set is header-focused and does not carry content markers, so
 ## the content flags are absent from this marker file. The test is therefore
-## reported as NA unless the 011b markers are also present, which keeps the
-## two scans independent: this script's boundaries never depend on 011b.
+## reported as NA unless the 001b markers are also present, which keeps the
+## two scans independent: this script's boundaries never depend on 001b.
 HAVE_CONTENT <- FALSE
 if (file.exists(paste0(SP, "markers4_raw.rds"))) {
   MB <- readRDS(paste0(SP, "markers4_raw.rds"))
@@ -198,14 +198,14 @@ if (file.exists(paste0(SP, "markers4_raw.rds"))) {
   cat("content markers available for the quality flag:", length(CFS), "filings\n")
 }
 
-## ---- 011f's cash flow pick, as the anchor -----------------------------
+## ---- 001d's cash flow pick, as the anchor -----------------------------
 ANCH <- list()
 if (file.exists(paste0(SP, "pick_anch.rds"))) {
   P9 <- readRDS(paste0(SP, "pick_anch.rds"))
   P9 <- P9[P9$kind == "cf", ]
   ANCH <- setNames(lapply(seq_len(nrow(P9)), function(i) c(P9$start[i], P9$end[i])),
                    P9$wrdsfname)
-  cat("cash flow anchors from 011f:", length(ANCH), "\n")
+  cat("cash flow anchors from 001d:", length(ANCH), "\n")
 }
 
 ## ---- per filing ----------------------------------------------------------
@@ -289,7 +289,7 @@ locate <- function(x) {
   ## 2009 and 2008" under each, so every entry has a period header and reads as
   ## a page header; the cash flow entry at 204 was then chosen as the cash flow
   ## statement, and the real one at 857 was never reached.
-  ## ...BUT IT MUST COUNT DISTINCT TITLES, NOT GREP ROWS. 011h greps JOINED
+  ## ...BUT IT MUST COUNT DISTINCT TITLES, NOT GREP ROWS. 001e greps JOINED
   ## line pairs, so one title is reported twice (sometimes three times). The
   ## collapse below used to run only on the survivors, after this test, so a
   ## title and its own duplicate already counted 2 of the 3 needed and ANY
@@ -320,7 +320,7 @@ locate <- function(x) {
   tl$figs <- if (is.null(nv)) TRUE else vapply(tl$line, function(L)
     sum(nv > L & nv <= L + FIG_WIN) >= FIG_MIN, logical(1))
   H <- tl[tl$hdr & !tl$crowd & tl$figs, ]
-  ## COLLAPSE NEAR-DUPLICATE HEADERS. 011h greps JOINED line pairs, so a title
+  ## COLLAPSE NEAR-DUPLICATE HEADERS. 001e greps JOINED line pairs, so a title
   ## on line N is reported on row N-1 (pair N-1,N) and again on row N (pair
   ## N,N+1), and a title split across two lines is reported three times. Each
   ## copy became its own header, so every statement was cut two or three times
@@ -335,7 +335,7 @@ locate <- function(x) {
   ## 3. group headers into runs of consecutive statement pages, and take the
   ##    run with the most headers. Ties go to the run holding a cash flow
   ##    statement, which is the statement the project is about.
-  ## USE 011f's CASH FLOW PICK AS THE ANCHOR WHERE ONE EXISTS. That pick is
+  ## USE 001d's CASH FLOW PICK AS THE ANCHOR WHERE ONE EXISTS. That pick is
   ## the one piece of this pipeline with hand validation behind it - 10 of 10
   ## on Matt's audit, 98.2% coverage - so the run to keep is the run it sits
   ## in, and the block to keep for each statement is the one nearest it.
@@ -413,7 +413,7 @@ locate <- function(x) {
   ## NEARNESS TO THE ANCHOR IS THE LAST TEST, NOT THE FIRST. Picking the run
   ## nearest the anchor asks the wrong question when the anchor is wrong,
   ## because SOME run is always nearest and nothing checks that the anchor is
-  ## even in it. CIK 72207's 2007 10-Q is the case: 011f's cash flow pick
+  ## even in it. CIK 72207's 2007 10-Q is the case: 001d's cash flow pick
   ## lands at 2861-2919, the real statements are the run at 166-781, and a
   ## junk run at 1502-1749 is a thousand lines closer to the bad anchor. The
   ## real run won only because the junk run held one header and was below
@@ -422,7 +422,7 @@ locate <- function(x) {
   ##
   ## So the tests run in order of how much they actually tell us:
   ##   1. does the run HOLD the anchor - decisive when it does, and it does
-  ##      for most filings, since 011f's pick is right ~98% of the time;
+  ##      for most filings, since 001d's pick is right ~98% of the time;
   ##   2. how many DIFFERENT statements are in the run - the statements print
   ##      together, so the run with the income statement, balance sheet and
   ##      cash flow statement in it is the statements section; a run of three
@@ -512,7 +512,7 @@ locate <- function(x) {
   ## OTHER ONE. Comprehensive income is kept as its own kind because
   ## International Bancshares prints it as a separate page between the income
   ## statement and the cash flow statement, and treating it as the income
-  ## statement made 011f pick the wrong one. But PAYONEER'S Q2 2021 10-Q
+  ## statement made 001d pick the wrong one. But PAYONEER'S Q2 2021 10-Q
   ## prints only "Condensed Consolidated Statements of Comprehensive Loss" -
   ## that single statement IS its income statement, and the filing shipped
   ## without one. So the ci block doubles as the is block exactly when the

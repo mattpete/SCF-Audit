@@ -1,12 +1,12 @@
 ## ============================================================================
-## 011h  SCAN FOR STATEMENT PAGE HEADERS      step 011 (locate), substep h
+## 001e  SCAN FOR STATEMENT PAGE HEADERS      step 001, substep e
 ## A second marker scan, run on JOINED LINE PAIRS, that looks for the header
 ## block printed at the top of every statement page rather than for the
 ## statements' contents.
 ## In : wrdssec.wrds_forms (the 500-filing pilot list, via cache/pick_anch.rds)
 ## Out: cache/markers_hdr.rds
 ## ============================================================================
-## WHY (Matt, 2026-11-17). 011b looks for CONTENT landmarks - net income, total
+## WHY (Matt, 2026-11-17). 001b looks for CONTENT landmarks - net income, total
 ## assets, earnings per share, the three cash flow sections - and that is what
 ## keeps failing:
 ##
@@ -38,7 +38,7 @@
 ## header to the next. Nothing about the statement's own contents is needed,
 ## which is exactly what the four failures above have in common.
 ##
-## TWO THINGS THIS SCAN DOES DIFFERENTLY FROM 011b:
+## TWO THINGS THIS SCAN DOES DIFFERENTLY FROM 001b:
 ##
 ## 1. IT GREPS JOINED LINE PAIRS. Every element above splits mid-phrase -
 ##    "CONDENSED" / "CONSOLIDATED BALANCE SHEETS", "INTERNATIONAL" /
@@ -62,11 +62,11 @@ PILOT <- Sys.getenv("PILOT", "pilot-2026-11")
 SP <- paste0(Sys.getenv("SEC_DATA_PATH"), "/", PILOT, "/cache/")
 stopifnot(nzchar(Sys.getenv("SEC_DATA_PATH")))
 
-## SCAN THE WHOLE SAMPLE, NOT WHAT 011f RESOLVED.
+## SCAN THE WHOLE SAMPLE, NOT WHAT 001d RESOLVED.
 ##
-## This used to read pick_anch.rds, 011f's picks, which meant approach C only
+## This used to read pick_anch.rds, 001d's picks, which meant approach C only
 ## ever saw filings where approach B had already found a cash flow statement.
-## On the fresh 500-filing holdout 011f found an anchor for 478, so 22 filings
+## On the fresh 500-filing holdout 001d found an anchor for 478, so 22 filings
 ## (4.4%) were never scanned for page headers at all and could not be located
 ## by any means - a loss of data to a hardcoded input rather than to anything
 ## about the filings.
@@ -77,11 +77,11 @@ stopifnot(nzchar(Sys.getenv("SEC_DATA_PATH")))
 fl <- sort(unique(c(readRDS(paste0(SP, "dev_d.rds"))$wrdsfname,
                     readRDS(paste0(SP, "loc_d.rds"))$wrdsfname)))
 cat("filings to scan:", length(fl), "  (the whole sample)\n")
-## 011f's picks remain the ANCHOR where one exists; they just no longer decide
+## 001d's picks remain the ANCHOR where one exists; they just no longer decide
 ## which filings get scanned.
 if (file.exists(paste0(SP, "pick_anch.rds"))) {
   pk <- readRDS(paste0(SP, "pick_anch.rds"))
-  cat("of which 011f resolved a cash flow anchor for:",
+  cat("of which 001d resolved a cash flow anchor for:",
       length(unique(pk$wrdsfname)), "\n")
 }
 
@@ -128,7 +128,7 @@ PAT <- paste0(
   ## ---- section brackets ------------------------------------------------
   ## The 10-Q and 10-K forms name the section. Both appear TWICE - once in the
   ## table of contents and once for real - so this marks candidates, not the
-  ## answer; 011i tells them apart by what follows.
+  ## answer; 001f tells them apart by what follows.
   "|item", S, "(1|8)[^a-z]{0,4}financial", S, "statements",
   "|notes", S, "to", S, "[a-z ]{0,40}financial", S, "statements",
   "|table", S, "of", S, "contents",
@@ -192,7 +192,7 @@ M <- data.frame(wrdsfname = ff[keep], nlines = nl[keep], line = lno[keep],
 M <- M[!is.na(M$wrdsfname) & nzchar(M$wrdsfname), ]
 
 ## ---- REFUSE TO SAVE A COLLAPSED RESULT ----------------------------------
-## Same guard as 011b, for the same reason: one bad character in the pattern
+## Same guard as 001b, for the same reason: one bad character in the pattern
 ## turns into an empty marker file that fails two scripts later with no error
 ## to trace.
 got <- length(unique(M$wrdsfname))

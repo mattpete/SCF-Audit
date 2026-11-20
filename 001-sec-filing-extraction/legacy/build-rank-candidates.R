@@ -1,10 +1,10 @@
 ## ============================================================================
-## 011d  BUILD AND RANK CANDIDATES         step 011 (locate), substep d
+## BUILD AND RANK CANDIDATES  -  SUPERSEDED (approach A; was 011d)
 ## Brackets each statement between its own top and bottom anchor, keeps only
 ## spans that carry the statement's whole required structure, then picks the
 ## (bs, is, cf) TRIPLE that sits together in the filing. Rank 1 is the pick;
-## the rest are fallbacks 011e can walk.
-## In : cache/markers4_raw.rds (011b), cache/numlines.rds (011c)
+## the rest are fallbacks legacy/export-chunk-text-approach-a can walk.
+## In : cache/markers4_raw.rds (001b), cache/numlines.rds (001c)
 ## Out: cache/chunks8.rds (all candidates, ranked), cache/pick9.rds (rank 1)
 ## ============================================================================
 ## PASS 3: STRUCTURE, NOT DENSITY.
@@ -12,8 +12,8 @@
 ## WHY THIS WAS REWRITTEN (Matt, 2026-11-17). The previous version generated
 ## candidate windows and ranked them by "complete, then SMALLEST, then densest",
 ## on the reasoning that ranking only had to be cheap because a validate-and-
-## retry loop in 011e would walk down the ranks until the block really was a
-## statement. That loop no longer fires - 011e's validator was loosened - so
+## retry loop in legacy/export-chunk-text-approach-a would walk down the ranks until the block really was a
+## statement. That loop no longer fires - legacy/export-chunk-text-approach-a's validator was loosened - so
 ## nothing was catching the bad picks, and the cost-minimising sort has a
 ## systematic bias: a statement's TAIL is shorter and denser than the whole
 ## statement, because working-capital lines are nothing but numbers. So the
@@ -142,7 +142,7 @@ F <- data.frame(
                         ## the bare line, and the line carrying its amounts.
                         ## Requiring a digit, $ or ( right after the word is
                         ## what keeps "Revenue Recognition" and the ASC 606
-                        ## reference out - see the note in 011b.
+                        ## reference out - see the note in 001b.
                         "|^ ?(revenues?|sales) ?[,:]? ?($|[0-9$(])",
                         "|(revenues?|sales) ?, net",
                         "|(total|net) interest (income|revenue)",
@@ -159,7 +159,7 @@ F <- data.frame(
   bs_tle = grepl("total liabilities and|total liabilities, |total equity and liabilities", t),
   ## the two section headings on a line of their own. The only landmarks that
   ## survive a filer printing its totals with an empty label cell - see the
-  ## note in 011b. Anchored, and with no "total" allowed, so that
+  ## note in 001b. Anchored, and with no "total" allowed, so that
   ## "Total liabilities and shareholders equity" does NOT satisfy them.
   bs_hasset = grepl("^ ?assets ?:? ?$", t),
   bs_hliab  = grepl("^ ?liabilities( and .{0,40}equity)? ?:? ?$", t),
@@ -168,7 +168,7 @@ F <- data.frame(
                        "|previously reported",
                        "|effect of .{0,40}(restatement|adjustment|revision|correction)"), t),
   ## a consolidating schedule's column captions - guarantor notes, Schedule I
-  ## parent-only statements. See the note in 011b: these are complete
+  ## parent-only statements. See the note in 001b: these are complete
   ## statements of the WRONG entity set, and they foot.
   consolidating = grepl(paste0("eliminations?|non.?guarantors?|guarantors?",
                                "|condensed consolidating",
