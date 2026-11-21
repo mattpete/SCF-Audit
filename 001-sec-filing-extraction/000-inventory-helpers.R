@@ -82,18 +82,43 @@ inv_log <- function(rows, stage = c("collected", "extracted"),
   w <- who_am_i()
   dir.create(paste0(.sec_dir(), "/logs"), showWarnings = FALSE, recursive = TRUE)
   p <- paste0(.sec_dir(), "/logs/progress_", w, ".csv")
+  ## EVERY COLUMN MUST APPEAR, ALWAYS, EVEN WHEN EMPTY. This used to be
+  ## `rep(locate_how, nrow(rows))`, and a caller passing a column that did not
+  ## exist - say `rows$locate_how` after a join silently suffixed it to
+  ## locate_how.x - passed NULL, `rep(NULL, n)` is NULL, and the tibble came
+  ## out with that column MISSING rather than NA. The log then had 6 columns
+  ## instead of 8, and because write_csv(append = TRUE) does not check the
+  ## header, the next correct call would have written 8 values under a
+  ## 6-column header and corrupted the shared progress file. Measured: the
+  ## first run of 001m wrote 299 such rows.
+  fill <- function(v, n, empty) {
+    if (length(v) == n) return(v)
+    if (length(v) == 0) return(rep(empty, n))
+    if (length(v) == 1) return(rep(v, n))
+    stop("inv_log: expected ", n, " values, got ", length(v), call. = FALSE)
+  }
+  n <- nrow(rows)
   new <- tibble(
     accession  = rows$accession,
     cik        = rows$cik,
     who        = w,
     stage      = stage,
     when       = Sys.Date(),
-    locate_how = if (length(locate_how) == nrow(rows)) locate_how
-                 else rep(locate_how, nrow(rows)),
-    n_blocks   = if (length(n_blocks) == nrow(rows)) n_blocks
-                 else rep(n_blocks, nrow(rows)),
-    note       = if (length(note) == nrow(rows)) note else rep(note, nrow(rows))
+    locate_how = fill(locate_how, n, NA_character_),
+    n_blocks   = fill(n_blocks,   n, NA_integer_),
+    note       = fill(note,       n, NA_character_)
   )
+
+  ## and refuse to append a frame whose columns do not match what is already
+  ## in the file, because that is the one failure write_csv cannot catch
+  if (file.exists(p)) {
+    hdr <- names(readr::read_csv(p, n_max = 0, show_col_types = FALSE))
+    if (!identical(hdr, names(new)))
+      stop("inv_log: ", basename(p), " has columns [", paste(hdr, collapse = ", "),
+           "] but this call would append [", paste(names(new), collapse = ", "),
+           "]. Appending would corrupt the log. Fix the caller, or move the ",
+           "old file aside if its schema is the stale one.", call. = FALSE)
+  }
   ## append = file exists; write_csv handles the header either way
   write_csv(new, p, append = file.exists(p))
   cat("logged", nrow(new), stage, "to", basename(p), "\n")

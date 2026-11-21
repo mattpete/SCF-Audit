@@ -1514,6 +1514,80 @@ around a published per-user cap is how an account gets noticed, and since the
 bottleneck is the shared archive rather than slots it would buy little. Ask
 WRDS first.
 
+### Collecting, in waves (`001m-run-collection-wave.R`)
+
+One command claims N filings from the inventory, scans / locates / pulls their
+statement text, files it, records it, and tidies up:
+
+```
+WAVE_N=25000 Rscript 001-sec-filing-extraction/001m-run-collection-wave.R
+```
+
+`DRY_RUN=1` claims and reports without running anything. `USE_GRID=FALSE` uses
+the SSH scans. `WAVE_KEEP=1` keeps a wave's intermediates for debugging.
+
+**Who does what** (Matt, 2026-11-20): **Matt collects the text for every
+filing**, so this defaults to `MINE_ONLY=FALSE` and ignores the inventory's
+per-person assignment. The assignment still governs the *second* stage, where
+Matt and Andrew split the in-harness parsing — that is `inv_todo("extract")`,
+whose own `mine_only` default is `TRUE`, and nothing here touches it.
+**No Compustat screen** (Matt, same date): the full 780,364.
+
+**Where things land.** The statement text accumulates permanently in
+`chunktext/year=YYYY/<wave>-part-N.parquet`, readable as one dataset with
+`open_dataset()` and handed over a year at a time. Measured across three test
+waves: **6.6 KB per filing**, so roughly **5 GB for the full population** —
+about a fifth of what the same text costs as JSON.
+
+**Three waves were run to prove it** (558 filings): both the text store and the
+progress log accumulate correctly, a second wave adds files *beside* the first
+in each year partition rather than replacing them, and the three waves located
+all three statements in 99.1%, 97.7% and 70.7% of their filings. The spread is
+expected — a wave takes whole firms in inventory order, so one wave can be five
+companies and is not a random sample of anything.
+
+**Four traps, all of which bit during that proving run:**
+
+- **`system2(env = )` is ignored on Windows**, silently. `PILOT` and
+  `FILE_LIST` reached no child process, every step ran against its default
+  (the 500-filing pilot cache) and died instantly. `Sys.setenv()` in the parent
+  is what works, because a child inherits.
+- **`inv_log()` dropped columns rather than filling them.** `rep(NULL, n)` is
+  `NULL`, so a caller passing a column that did not exist — e.g.
+  `rows$locate_how` after a join had suffixed it to `locate_how.x`, which is
+  exactly what happens because *the inventory carries `locate_how` and
+  `n_blocks` itself* — produced a log with 6 columns instead of 8. Since
+  `write_csv(append = TRUE)` does not check the header, the next *correct* call
+  would have written 8 values under a 6-column header and corrupted the shared
+  log. `inv_log()` now fills every column and refuses to append a mismatched
+  schema; 001m drops the inventory's own copies before joining.
+- **`inv_todo()` alone does not make waves idempotent.** It reads `collected`
+  from the inventory *parquet*, which is a cached join of the logs and only
+  refreshes when `001a` is re-run. Measured: after a wave logged 299 filings,
+  the next claim of 300 overlapped it by **299**. 001m therefore subtracts
+  every person's progress log directly, so back-to-back waves are safe without
+  a rebuild.
+- **`existing_data_behavior` must be `"overwrite"`**, which despite its name
+  only replaces files whose names collide and leaves the rest of the partition
+  alone. `"delete_matching"` would empty the whole `year=` partition and
+  destroy every earlier wave's text in it.
+
+**What a wave keeps and what it throws away.** The markers (31 KB/filing) are
+rebuildable and go. `candtext.rds` and `candidates.jsonl` (~20 KB/filing) are a
+*duplicate* of what was just filed into `chunktext/` — at full scale 15 GB of
+the same text stored twice, syncing to every collaborator — and go.
+`chunks_hdr.rds` (~70 bytes/filing) stays, because it is the record of what was
+found and cannot be rebuilt without re-scanning.
+
+**A filing with no text is left unclaimed**, not logged, so a later wave
+retries it. That is the conservative direction, and it means a small permanent
+residue of retries: **193 of the 780,364 filings were submitted on paper** —
+accession beginning `9999999997`, a 1.3 KB file holding the SEC cover header
+and no document at all — so they will never yield text. They are 0.025%, almost
+all 2002, and detectable from the inventory's own `fsize_clean` (all under 2.4
+KB against a median of 256 KB) without touching WRDS. Nothing breaks if they
+are simply left alone.
+
 Supporting files, not steps:
 
 | file | does |
