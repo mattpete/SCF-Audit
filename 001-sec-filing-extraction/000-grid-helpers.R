@@ -312,25 +312,64 @@ grid_run <- function(files, remote, jobname,
 ## Format produced by the scan body, per filing:
 ##   #F|<wrdsfname>|<total lines>     one per filing
 ##   M|<line no>|<text>               one per marker hit
-grid_parse_markers <- function(acc) {
-  ln <- unlist(strsplit(paste(acc, collapse = "\n"), "\n", fixed = TRUE))
-  cur <- NA_character_; curn <- NA_integer_
-  ff <- character(length(ln)); nl <- integer(length(ln))
-  lno <- integer(length(ln)); txt <- character(length(ln)); keep <- logical(length(ln))
-  for (i in seq_along(ln)) {
-    x <- ln[i]
-    if (startsWith(x, "#F|")) {
-      p <- strsplit(x, "|", fixed = TRUE)[[1]]
-      cur <- p[2]; curn <- as.integer(p[3]); next }
-    if (!startsWith(x, "M|")) next
-    p <- strsplit(x, "|", fixed = TRUE)[[1]]; if (length(p) < 3) next
-    ff[i] <- cur; nl[i] <- curn
-    lno[i] <- suppressWarnings(as.integer(p[2]))
-    txt[i] <- tolower(paste(p[-(1:2)], collapse = " ")); keep[i] <- !is.na(lno[i])
+## VECTORISED AND CHUNKED, because the obvious transcription of the originals'
+## loop does not survive a real wave. Two separate failures, both measured on
+## the first 25,000-filing run:
+##
+## 1. `paste(acc, collapse = "\n")` DIED: "result would exceed 2^31-1 bytes".
+##    25,000 filings yield ~27M marker lines, ~2.5 GB of text, and R cannot
+##    hold one string that long. The paste was pointless anyway - the SSH
+##    scripts need it because each element of `acc` is a whole batch's stdout,
+##    but here the lines arrive already split by readLines(), so pasting them
+##    together and splitting them again was a round trip that only served to
+##    materialise the thing that broke. strsplit() is element-wise, so both
+##    shapes are handled without ever concatenating.
+##
+## 2. The per-line for-loop would not have finished either: it calls strsplit()
+##    once per line and allocates five full-length vectors, on 27M lines.
+##
+## So the filing each marker belongs to is resolved with a cumsum over the
+## "#F|" header rows - a running count of headers seen is exactly an index into
+## the header list - and the fields come off with vectorised sub(). Chunking
+## caps peak memory; `carry` passes the filing active at a chunk boundary into
+## the next chunk, which is the one thing the chunking could otherwise break.
+##
+## Verified against the SSH output by 001k after this rewrite.
+grid_parse_markers <- function(acc, chunk = 2e6) {
+  ln <- if (any(grepl("\n", acc, fixed = TRUE)))
+          unlist(strsplit(acc, "\n", fixed = TRUE)) else acc
+  rm(acc)
+  n <- length(ln)
+  if (n == 0) return(data.frame(wrdsfname = character(0), nlines = integer(0),
+                                line = integer(0), text = character(0),
+                                stringsAsFactors = FALSE))
+  out <- list(); k <- 0L
+  carry_f <- NA_character_; carry_n <- NA_integer_
+  for (lo in seq(1L, n, by = chunk)) {
+    hi <- min(lo + chunk - 1L, n); k <- k + 1L
+    x <- ln[lo:hi]
+    isF <- startsWith(x, "#F|"); isM <- startsWith(x, "M|")
+    ## "#F|<wrdsfname>|<nlines>" - the path never contains a pipe, and the
+        ## marker text cannot either because the remote body runs tr -d "|"
+    fh <- x[isF]
+    fname <- sub("[|][0-9]+$", "", substring(fh, 4L))
+    fn    <- suppressWarnings(as.integer(sub("^.*[|]", "", fh)))
+    ## 0 = "before the first header in this chunk", i.e. the carried filing
+    grp <- cumsum(isF)
+    xm  <- x[isM]
+    lno <- suppressWarnings(as.integer(sub("[|].*$", "", substring(xm, 3L))))
+    out[[k]] <- data.frame(
+      wrdsfname = c(carry_f, fname)[grp[isM] + 1L],
+      nlines    = c(carry_n, fn)[grp[isM] + 1L],
+      line      = lno,
+      text      = gsub("[[:space:]]+", " ", tolower(sub("^M[|][0-9]+[|]", "", xm))),
+      stringsAsFactors = FALSE)
+    if (length(fh)) { carry_f <- fname[length(fname)]; carry_n <- fn[length(fn)] }
+    rm(x, isF, isM, fh, fname, fn, grp, xm, lno)
   }
-  M <- data.frame(wrdsfname = ff[keep], nlines = nl[keep], line = lno[keep],
-                  text = gsub("[[:space:]]+", " ", txt[keep]), stringsAsFactors = FALSE)
-  M <- M[!is.na(M$wrdsfname) & nzchar(M$wrdsfname), ]
+  rm(ln)
+  M <- if (length(out) == 1L) out[[1]] else do.call(rbind, out)
+  M <- M[!is.na(M$line) & !is.na(M$wrdsfname) & nzchar(M$wrdsfname), ]
   ## dedupe, because the company-name rule runs as a second grep and a line
   ## satisfying both patterns is emitted twice (see the note in 001b/001e)
   M[!duplicated(M[c("wrdsfname", "line", "text")]), ]

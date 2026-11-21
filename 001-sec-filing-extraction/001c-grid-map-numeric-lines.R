@@ -50,7 +50,13 @@ acc <- grid_run(ff, P$remote, jobname = "scfnum",
                 keep = identical(Sys.getenv("GRID_KEEP"), "1"))
 
 ## ---- parse (mirrors the loop at the foot of 001c) --------------------------
-ln <- unlist(strsplit(paste(acc, collapse = "\n"), "\n", fixed = TRUE))
+## No paste(collapse) - strsplit() is element-wise and the lines arrive already
+## split, so concatenating them first only risks R's 2^31-1 byte string limit.
+## That limit is not hypothetical: the same construct in grid_parse_markers()
+## killed a 25,000-filing wave outright. One line per filing here rather than
+## one per marker, so it has more headroom, but the fix costs nothing.
+ln <- if (any(grepl("\n", acc, fixed = TRUE)))
+        unlist(strsplit(acc, "\n", fixed = TRUE)) else acc
 ln <- ln[startsWith(ln, "#")]
 NUM <- list()
 for (x in ln) {
