@@ -46,7 +46,7 @@ Agreed structure, Matt, 2026-11-19. Scripts are numbered by step.
 | step | what it does | script | state |
 |---|---|---|---|
 | **1** | build the inventory: every filing we could want, with the screens as columns | `001a-build-filing-inventory.R` | **built and run.** 913,756 rows, 780,364 filings to fetch |
-| **2** | pull the chunk text off WRDS for the uncollected part of the inventory | `001g` (pull) + `001e`/`001f` (locate) | locating works, 96.6% on a fresh holdout. Not yet wired to the inventory |
+| **2** | pull the chunk text off WRDS for the uncollected part of the inventory | `001g` (pull) + `001e`/`001f` (locate), driven by `001m`/`001n` | **built and run to completion, 2026-11-23.** 753,484 of 780,368 collected (96.6%); 26,880 hold no printed statement; 4 left, all filed since the inventory was last built |
 | **3** | turn chunk text into JSON line items — **in harness, not an API** | none; done by hand in a session | run once, on 10 filings. 1,890 rows, 15 of 18 cash flow columns footed |
 | **4** | JSON into a tidy parquet | `001h-build-tidy-frame.R` | built; produced the frame Matt reviewed 2026-11-16 |
 | **5** | compare filings to find revised line items | none yet — **but see below** | not started |
@@ -1636,6 +1636,42 @@ success supersedes an earlier empty rather than contradicting it.
   nothing and re-claims the same filings forever. Zero blocks is now a
   legitimate empty result, and `001m` skips the pull and records the whole claim
   as `notext`.
+
+### What the fix cost, and where collection ended (2026-11-23)
+
+Four waves, 4.8 h, no failures:
+
+| wave | claimed | collected | no statement | min |
+|---|---|---|---|---|
+| 1 | 25,000 | 711 | **24,289** | 19 |
+| 2 | 25,000 | 24,179 | 821 | 92 |
+| 3 | 25,000 | 24,217 | 783 | 98 |
+| 4 | 19,670 | 18,983 | 687 | 80 |
+
+**Final: 753,484 of 780,368 collected (96.6%), 26,880 with no printed statement
+in them, 0 left to try.** Wave 1 *is* the fix — it ate the whole stalled block
+in 19 minutes by writing it off, where the old code had been grinding through it
+at ~500 a wave. Waves 2–4 then ran at ~24,000 per 90 min, the rate the design
+assumed all along, over filings nothing had ever reached.
+
+The empty rate fell from 97% in wave 1 to ~3% in waves 2–4, which is the
+confirmation that mattered: the stalled block really was amendments, and nothing
+about recent filings is harder to collect. Of the 26,880 empties, **86.7% are
+amendments** — 14,937 `10-K/A`, 5,917 `10-Q/A`, 1,452 `10KSB/A`, 902 `10QSB/A` —
+and for those, "no statement" is the correct answer rather than a miss.
+
+**The residual worth a second look: 3,587 REGULAR filings** (`10-K`, `10-Q`,
+`10-KSB`, `10-QSB`), 0.46% of the population, where nothing was located. Not all
+are misses — 188 are under 2 KB and 1,217 under 20 KB, too small to hold
+financial statements at all — but the median is 37 KB and p90 202 KB, so on the
+order of 2,400 are substantial filings the locator genuinely failed on. **73% of
+them are pre-2010**, which is where the formatting is least regular. They are
+written off, not lost: `RETRY_NOTEXT=1` re-claims the whole set if the locator
+improves, and `collected` supersedes `notext` on a later success.
+
+Re-running `001a` afterwards reported **780,368** distinct filings against the
+780,364 the run worked from, and 4 still to collect. That is ordinary drift —
+four filings hit WRDS between the two inventory builds — not a gap in coverage.
 
 Supporting files, not steps:
 
