@@ -73,7 +73,15 @@ cat(strrep("=", 70), "\n")
 ## fatal for an automated wave, so the logs are subtracted here directly. Every
 ## person's log is read, not just this user's, because Matt collects everything
 ## and a filing collected by either of them is collected.
-logged_collected <- function() {
+##
+## BOTH FINISHED STAGES COUNT. "collected" is text filed; "notext" is scanned
+## and empty. Subtracting only the first is what wedged the first full run:
+## filings with no printed statement stayed in the queue, 24,572 of them piled
+## up at the head of the claim, and every wave re-scanned all of them to find
+## ~500 collectible ones -- 18 minutes a wave, decaying ~3% each time, with
+## 70,398 never-attempted filings stuck behind them. RETRY_NOTEXT=1 ignores
+## the notext side, for re-attempting a written-off set after a locator change.
+logged_done <- function(stages = c("collected", "notext")) {
   lg <- list.files(paste0(SD, "/inventory/logs"), pattern = "^progress_.*\\.csv$",
                    full.names = TRUE)
   if (!length(lg)) return(character(0))
@@ -81,7 +89,7 @@ logged_collected <- function() {
     d <- try(read_csv(f, col_types = cols(.default = col_character())), silent = TRUE)
     if (inherits(d, "try-error") || !all(c("accession", "stage") %in% names(d)))
       return(character(0))
-    d$accession[d$stage == "collected"]
+    d$accession[d$stage %in% stages]
   }))
   unique(out)
 }
@@ -90,12 +98,15 @@ logged_collected <- function() {
 ## unknown number, and over-fetching some fixed multiple would quietly return a
 ## short wave once the logs grew past it
 rows <- inv_todo("collect", n = 10e6, mine_only = MINE_ONLY)
-done <- logged_collected()
+RETRY_NOTEXT <- identical(Sys.getenv("RETRY_NOTEXT"), "1")
+done <- logged_done(if (RETRY_NOTEXT) "collected" else c("collected", "notext"))
+if (RETRY_NOTEXT) cat("RETRY_NOTEXT=1: re-claiming filings previously scanned as empty\n")
 if (length(done)) {
   before <- nrow(rows)
   rows <- rows |> filter(!accession %in% done)
-  cat(sprintf("excluded %s already in the progress logs\n",
-              format(before - nrow(rows), big.mark = ",")))
+  cat(sprintf("excluded %s already finished in the progress logs%s\n",
+              format(before - nrow(rows), big.mark = ","),
+              if (RETRY_NOTEXT) " (collected only)" else " (collected or no statement)"))
 }
 rows <- head(rows, WAVE_N)
 if (nrow(rows) == 0) { cat("\nNothing left to collect.\n"); quit(status = 0) }
@@ -145,6 +156,28 @@ step("markers",      g("001b-grid-scan-statement-markers.R", "001b-scan-statemen
 step("numeric lines", g("001c-grid-map-numeric-lines.R",     "001c-map-numeric-lines.R"))
 step("page headers",  g("001e-grid-scan-page-headers.R",     "001e-scan-page-headers.R"))
 step("locate",        "001f-locate-by-page-headers.R")
+
+## A WAVE THAT LOCATES NOTHING IS FINISHED, NOT FAILED. It happens once the
+## queue reaches a run of filings with no printed statement in them -- a batch
+## of 297 amendments produced zero blocks between them. There is nothing to
+## pull, and the two steps below would stop() on the empty frame, which would
+## abort before anything was logged and leave the same filings to be re-claimed
+## on the next wave, forever. So record the whole claim as scanned-and-empty
+## and finish cleanly.
+CH <- readRDS(paste0(SP, "chunks_hdr.rds"))
+if (!nrow(CH)) {
+  cat("\nno statement located in any of the", nrow(rows),
+      "filings claimed - recording them as scanned-and-empty\n")
+  inv_log(rows, "notext", note = WAVE)
+  cat("\n", strrep("=", 70), "\n", sep = "")
+  cat(sprintf("WAVE %s DONE in %.1f min\n", WAVE,
+              as.numeric(difftime(Sys.time(), t_all, units = "mins"))))
+  cat(sprintf("  collected   0 of %s claimed\n", format(nrow(rows), big.mark = ",")))
+  cat(sprintf("  no text     %s  (logged as scanned-and-empty, not re-claimed)\n",
+              format(nrow(rows), big.mark = ",")))
+  quit(status = 0)
+}
+
 step("pull text",     "001g-export-chunk-text.R")
 
 ## ---- 3. file the text into the permanent store -----------------------------
@@ -181,11 +214,14 @@ cat(sprintf("\nfiled %s blocks for %s filings into %s (partitioned by year)\n",
             format(n_distinct(D$wrdsfname), big.mark = ","), CHUNK))
 
 ## ---- 4. record what was collected ------------------------------------------
-## ONLY filings that actually produced statement text are logged. A filing that
-## came back empty stays unclaimed, which is the conservative direction: it will
-## be retried in a later wave rather than silently dropped. Genuinely empty
-## filings do exist (193 paper filings carry a header and no document), so a
-## small permanent residue of retries is expected and harmless.
+## TWO LOGS, both written: `collected` for filings that produced statement
+## text, `notext` for the rest. Those used to be left unlogged "to be retried
+## in a later wave", on the assumption that empties were a small residue (193
+## paper filings carry a header and no document). They are not a small
+## residue -- 24,572 of them accumulated at the head of the queue and were
+## re-scanned on every wave of a 59-hour run, which is what the notext stage
+## fixes. A `notext` entry is recoverable: it names the wave, and RETRY_NOTEXT=1
+## re-claims them.
 C <- readRDS(paste0(SP, "chunks_hdr.rds"))
 per <- C |> group_by(wrdsfname) |>
   summarise(n_blocks = n(),
@@ -205,6 +241,17 @@ stopifnot(all(c("locate_how", "n_blocks", "accession", "cik") %in% names(ok)))
 miss <- nrow(rows) - nrow(ok)
 inv_log(ok, "collected", locate_how = ok$locate_how, n_blocks = ok$n_blocks,
         note = WAVE)
+
+## RECORD THE EMPTIES TOO. Every claimed filing reached all five steps by the
+## time this line runs -- any scan that came back short aborts the wave before
+## here (grid_run() errors on a missing slice, and each step is checked), so a
+## filing with no block is one the locator genuinely found no statement in,
+## not one nothing looked at. Writing that down is what lets the queue move
+## past it; leaving it unlogged is the bug this replaces, which cost 59 hours
+## and left 70,398 filings unreached. Recoverable either way: the entry names
+## this wave, and RETRY_NOTEXT=1 re-claims them.
+bad <- rows |> filter(!accession %in% ok$accession)
+if (nrow(bad)) inv_log(bad, "notext", note = WAVE)
 
 ## ---- 5. tidy up ------------------------------------------------------------
 ## Three classes of leftover, and only one is worth keeping:
@@ -236,7 +283,7 @@ cat(sprintf("WAVE %s DONE in %.1f min\n", WAVE,
 cat(sprintf("  collected   %s of %s claimed (%.1f%%)\n",
             format(nrow(ok), big.mark = ","), format(nrow(rows), big.mark = ","),
             100 * nrow(ok) / nrow(rows)))
-cat(sprintf("  no text     %s  (left unclaimed, retried in a later wave)\n",
+cat(sprintf("  no text     %s  (logged as scanned-and-empty, not re-claimed)\n",
             format(miss, big.mark = ",")))
 print(ok |> count(locate_how) |> mutate(pct = sprintf("%.1f%%", 100 * n / sum(n))) |>
       as.data.frame())

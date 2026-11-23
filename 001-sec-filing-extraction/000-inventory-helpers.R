@@ -58,13 +58,23 @@ inv <- function() {
 ## `stage = "collect"` gives filings with no chunk text yet.
 ## `stage = "extract"` gives filings whose text is collected but not yet
 ## turned into JSON, which is the in-harness step.
+##
+## A filing logged `notext` is NOT still to collect. It was scanned and holds
+## no printed statement - most are 10-K/A and 10-Q/A amendments, which usually
+## amend one item and do not reprint the financials. Leaving them in the queue
+## is what wedged the first full run: 24,572 of them sat at the head of the
+## claim and were re-scanned on every wave, so the frontier advanced ~500
+## filings per 18-minute wave instead of 24,000 per 90, and the 70,398 filings
+## behind them (the newest filers, every CIK above ~1.55M) were never reached.
 inv_todo <- function(stage = c("collect", "extract"), n = 250,
                      mine_only = TRUE, who = NULL) {
   stage <- match.arg(stage)
   w <- if (is.null(who)) who_am_i() else who
   d <- inv() |> filter(in_sample, collect_primary)
   if (mine_only) d <- d |> filter(assigned_to == w)
-  d <- if (stage == "collect") d |> filter(!collected)
+  ## tolerate an inventory parquet built before the notext stage existed
+  if (!"no_text" %in% names(d)) d$no_text <- FALSE
+  d <- if (stage == "collect") d |> filter(!collected, !no_text)
        else                    d |> filter(collected, !extracted)
   d |> arrange(batch, cik, period_end) |> head(n)
 }
@@ -74,7 +84,17 @@ inv_todo <- function(stage = c("collect", "extract"), n = 250,
 ##
 ## Appends; never rewrites. An accession logged twice is fine: 001a keeps the
 ## latest entry per (accession, cik, stage).
-inv_log <- function(rows, stage = c("collected", "extracted"),
+##
+## THREE STAGES, and the third is a negative result worth keeping:
+##   collected  text was found and filed
+##   extracted  that text has been turned into JSON in harness
+##   notext     the filing WAS scanned and holds no printed statement, so it
+##              is finished, not pending. Recording it is what keeps the
+##              collect queue moving (see inv_todo), and it is also a finding
+##              in its own right: most are amendments that never reprint the
+##              financials. `note` carries the wave that established it, so a
+##              later pass can retry a set by name if the locator improves.
+inv_log <- function(rows, stage = c("collected", "extracted", "notext"),
                     locate_how = NA_character_, n_blocks = NA_integer_,
                     note = NA_character_) {
   stage <- match.arg(stage)
@@ -135,10 +155,13 @@ inv_progress <- function() {
   ## summarise() evaluates in order, so naming the count `collected` makes
   ## the next line's mean(collected) read the COUNT, not the flag -- which
   ## printed "1000.0%" the first time this ran.
+  if (!"no_text" %in% names(tot)) tot$no_text <- FALSE
   print(tot |> group_by(assigned_to) |>
     summarise(filings = dplyr::n(), batches = max(batch),
               pct_collected = sprintf("%.2f%%", 100 * mean(collected)),
               n_collected = sum(collected), n_extracted = sum(extracted),
+              n_no_text = sum(no_text),
+              n_pending = sum(!collected & !no_text),
               .groups = "drop") |> as.data.frame())
   lg <- list.files(paste0(.sec_dir(), "/logs"), pattern = "\\.csv$",
                    full.names = TRUE)

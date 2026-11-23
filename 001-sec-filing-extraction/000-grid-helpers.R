@@ -299,6 +299,24 @@ grid_run <- function(files, remote, jobname,
 
   attr(acc, "tasks_missing") <- gone
   attr(acc, "elapsed") <- el
+
+  ## A MISSING SLICE MUST BE AN ERROR, NOT A WARNING. This used to print
+  ## FAILED TASKS and return the short result anyway, which was survivable
+  ## only because a filing missing from a scan was retried in a later wave.
+  ## Once 001m started recording "scanned, no statement found" so those
+  ## filings stop being re-claimed, a silently dropped slice would be written
+  ## off permanently - 250 filings per slice marked as having no cash flow
+  ## statement when nothing had actually looked at them. So the caller never
+  ## gets a partial scan; the wave aborts, logs nothing, and re-claims the
+  ## same filings on the next pass, which is what the wave design is for.
+  ## GRID_ALLOW_PARTIAL=1 overrides it for debugging a persistently bad slice.
+  if (length(gone) && !identical(Sys.getenv("GRID_ALLOW_PARTIAL"), "1"))
+    stop(sprintf(paste0("%d of %d grid slices did not finish (tasks %s). Their ",
+                        "filings were never scanned, so this result is ",
+                        "incomplete and must not be treated as 'no statement ",
+                        "found'. Re-run; set GRID_ALLOW_PARTIAL=1 only to debug."),
+                 length(gone), tasks, paste(head(gone, 10), collapse = ", ")),
+         call. = FALSE)
   acc
 }
 

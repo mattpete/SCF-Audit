@@ -559,9 +559,32 @@ locate <- function(x) {
 
 C <- do.call(rbind, lapply(split(M, M$wrdsfname), locate)); rownames(C) <- NULL
 allf <- length(unique(M$wrdsfname))
-cat("\n=== APPROACH C: cut at page headers ===\n")
-cat("filings with any block:", length(unique(C$wrdsfname)), "of", allf, "\n")
 
+## ZERO BLOCKS IS A LEGITIMATE ANSWER, NOT AN ERROR. When no filing in the
+## batch yields a block, rbind of all-NULL returns NULL, and the diagnostics
+## below died on `!nrow(NULL)` ("invalid argument type"). That never showed up
+## while batches were random -- some filing always matched -- and appeared the
+## moment a batch was drawn from the filings earlier waves had failed on: 297
+## amendments, not one printed statement between them, and the step crashed
+## instead of reporting an empty result. A crash there is the worse outcome,
+## because the wave then logs NOTHING and re-claims the same filings forever,
+## which is the wedge 001m's notext stage exists to prevent. So: write the
+## empty frame, say so, and exit 0.
+EMPTY_C <- data.frame(
+  kind = character(0), start = integer(0), end = integer(0), len = integer(0),
+  pages = integer(0), how = character(0), how_end = character(0),
+  titled = logical(0), nnum = integer(0), has_figures = logical(0),
+  complete = logical(0), miss = character(0), wrdsfname = character(0),
+  nlines = integer(0), d_anchor = integer(0), rank = integer(0),
+  stringsAsFactors = FALSE)
+NO_BLOCKS <- is.null(C) || !nrow(C)
+if (NO_BLOCKS) C <- EMPTY_C
+
+cat("\n=== APPROACH C: cut at page headers ===\n")
+cat("filings with any block:", length(unique(C$wrdsfname)), "of", allf,
+    if (NO_BLOCKS) "- no statement located in any of them\n" else "\n")
+
+if (!NO_BLOCKS) {
 cat("\n=== blocks found, by statement ===\n")
 for (ty in c("cf", "is", "bs", "ci", "eq")) {
   z <- C[C$kind == ty, ]
@@ -586,6 +609,8 @@ wc <- w[complete.cases(w), ]
 sp <- pmax(wc$end.cf, wc$end.is, wc$end.bs) - pmin(wc$start.cf, wc$start.is, wc$start.bs)
 cat(sprintf("span from first to last: median %4.0f  p90 %5.0f  max %6.0f\n",
     median(sp), quantile(sp, .9), max(sp)))
+}   ## end if (!NO_BLOCKS) -- the diagnostics above all index into C
 
 saveRDS(C, paste0(SP, "chunks_hdr.rds"))
-cat("\nsaved", paste0(SP, "chunks_hdr.rds"), "\n")
+cat("\nsaved", paste0(SP, "chunks_hdr.rds"),
+    sprintf("(%d blocks)\n", nrow(C)))

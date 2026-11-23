@@ -1579,14 +1579,63 @@ the same text stored twice, syncing to every collaborator — and go.
 `chunks_hdr.rds` (~70 bytes/filing) stays, because it is the record of what was
 found and cannot be rebuilt without re-scanning.
 
-**A filing with no text is left unclaimed**, not logged, so a later wave
-retries it. That is the conservative direction, and it means a small permanent
-residue of retries: **193 of the 780,364 filings were submitted on paper** —
-accession beginning `9999999997`, a 1.3 KB file holding the SEC cover header
-and no document at all — so they will never yield text. They are 0.025%, almost
-all 2002, and detectable from the inventory's own `fsize_clean` (all under 2.4
-KB against a median of 256 KB) without touching WRDS. Nothing breaks if they
-are simply left alone.
+**A filing with no text is logged as `notext`** — scanned, no printed statement
+in it — and is not claimed again. That is a third log stage beside `collected`
+and `extracted`, and it exists because the original design (leave it unlogged,
+a later wave will retry it) assumed empties were a small residue. **They are
+not, and the assumption wedged the first full run.**
+
+### The wedge, measured (2026-11-23)
+
+The first full run did 117 waves in 58.9 h and collected 685,394 of 780,364 —
+then ground to a halt in plain sight:
+
+| | |
+|---|---|
+| collected, of every filing the queue reached | ~96% |
+| filings with no statement, re-scanned on **every** wave | 24,572 |
+| filings behind them that nothing ever looked at | **70,398** |
+| rate when stopped | ~500 per 18-min wave, decaying ~3% a wave |
+| where it was heading | plateau near 90%, newest filers never collected |
+
+Because nothing recorded a failed filing, the claim re-offered all 24,572 of
+them every wave, and the frontier advanced only by the handful it managed to
+collect — ~500 filings per 18-minute wave instead of ~24,000 per 90. The
+stranded block was the **entire top CIK decile** (CIK above ~1.55M, 9.5%
+collected against ~96% everywhere else), which first read as modern filings
+being harder to parse and was nothing of the kind: 25 of them pulled straight
+off WRDS were ordinary files, present, normal size, hundreds of pattern hits.
+They had simply never been reached.
+
+**What the empties are.** 85% of the stalled block are `10-K/A` and `10-Q/A`
+amendments, which usually amend one item without reprinting the financials, so
+"no statement found" is the right answer rather than a miss. A smaller
+permanent floor sits under that: **193 of the 780,364 filings were submitted on
+paper** — accession beginning `9999999997`, a 1.3 KB file holding the SEC cover
+header and no document — detectable from the inventory's own `fsize_clean` (all
+under 2.4 KB against a median of 256 KB) without touching WRDS.
+
+**Recoverable, deliberately.** A `notext` entry carries the wave that
+established it, and `RETRY_NOTEXT=1` re-claims them, so a locator improvement
+can be re-run over the written-off set without hand-editing an append-only log.
+`001a` also lets `collected` win over `notext` for the same filing, so a later
+success supersedes an earlier empty rather than contradicting it.
+
+**Two further bugs the fix exposed, both of which would have re-wedged it:**
+
+- **`grid_run()` warned about a failed slice and returned the short result
+  anyway.** Survivable while a missing filing was retried later; fatal once
+  empties are written off, because 250 filings per lost slice would be recorded
+  as having no statement when nothing had looked at them. It now errors;
+  `GRID_ALLOW_PARTIAL=1` overrides for debugging.
+- **`001f` crashed when *no* filing in a batch yielded a block** —
+  `do.call(rbind, ...)` over all-NULL returns `NULL` and the diagnostics died on
+  `!nrow(NULL)`. Never seen while batches were effectively random; appeared on
+  the first batch drawn from the stalled block (297 amendments, zero statements
+  between them). A crash there is the worse failure, since the wave then logs
+  nothing and re-claims the same filings forever. Zero blocks is now a
+  legitimate empty result, and `001m` skips the pull and records the whole claim
+  as `notext`.
 
 Supporting files, not steps:
 

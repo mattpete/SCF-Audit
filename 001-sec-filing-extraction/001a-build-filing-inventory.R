@@ -342,16 +342,28 @@ if (length(logs)) {
     select(accession, cik, collect_date = when, locate_how, n_blocks)
   extr <- lg |> filter(stage == "extracted") |>
     select(accession, cik, extract_date = when)
+  ## SCANNED AND EMPTY IS A RESULT, NOT A GAP. A `notext` entry says the
+  ## filing was looked at and holds no printed statement -- overwhelmingly
+  ## amendments, which amend an item without reprinting the financials. It
+  ## has to be recorded or the collect queue re-scans it on every wave; see
+  ## the comment on inv_todo in 000-inventory-helpers.R for what that cost.
+  notx <- lg |> filter(stage == "notext") |>
+    select(accession, cik, no_text_date = when, no_text_wave = note)
   d <- d |>
     left_join(coll, by = c("accession", "cik")) |>
     left_join(extr, by = c("accession", "cik")) |>
-    mutate(collected = !is.na(collect_date), extracted = !is.na(extract_date))
+    left_join(notx, by = c("accession", "cik")) |>
+    mutate(collected = !is.na(collect_date), extracted = !is.na(extract_date),
+           ## collected wins: if text was eventually found, an earlier notext
+           ## entry is stale rather than contradictory
+           no_text = !is.na(no_text_date) & !collected)
 } else {
   cat("no progress logs yet -- everything is uncollected\n")
   d <- d |> mutate(
     collect_date = as.Date(NA), locate_how = NA_character_,
     n_blocks = NA_integer_, extract_date = as.Date(NA),
-    collected = FALSE, extracted = FALSE)
+    no_text_date = as.Date(NA), no_text_wave = NA_character_,
+    collected = FALSE, extracted = FALSE, no_text = FALSE)
 }
 write_parquet(d, OUT)
 cat("\nwritten:", OUT, "\n")
@@ -381,8 +393,12 @@ cat(sprintf("  in sample        %10s  %7s filers\n",
     format(nrow(ins), big.mark = ","), format(n_distinct(ins$cik), big.mark = ",")))
 cat(sprintf("  distinct filings %10s  (co-registrant copies removed)\n",
     format(sum(ins$collect_primary), big.mark = ",")))
+cat(sprintf("  collected        %10s\n",
+    format(sum(ins$collect_primary & ins$collected), big.mark = ",")))
+cat(sprintf("  no statement in it %8s  (scanned, nothing to collect)\n",
+    format(sum(ins$collect_primary & ins$no_text), big.mark = ",")))
 cat(sprintf("  still to collect %10s\n",
-    format(sum(ins$collect_primary & !ins$collected), big.mark = ",")))
+    format(sum(ins$collect_primary & !ins$collected & !ins$no_text), big.mark = ",")))
 
 cat("\n-- what the SIC screen removed --\n")
 print(d |> filter(g_drop_sic) |> count(regsic, sort = TRUE) |>
