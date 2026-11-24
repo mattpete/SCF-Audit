@@ -273,8 +273,125 @@ ROLL_OTH_PAT <- local({
   q <- "held for sale|reclassif|classified as"
   paste0("(cash|equivalents).{0,80}(", q, ")|(", q, ").{0,40}(cash|equivalents)")
 })
+## PAT AND NOT LIVE HERE, NOT IN THE FOOTING SECTION BELOW, BECAUSE THE
+## RESOLVER NEEDS THEM. resolve_netchange() reads PAT to find the section
+## subtotals and it runs long before the footing check. With PAT defined
+## further down, every call threw "object 'PAT' not found", the tryCatch
+## around it swallowed the error, and the pass silently did nothing - which
+## looks exactly like a rule that never matches. Keep definitions above use.
+
+PAT <- c(
+  op  = "net cash.{0,40}operat|cash (provided|used).{0,30}operat",
+  inv = "net cash.{0,40}invest|cash (provided|used).{0,30}invest",
+  fin = "net cash.{0,40}financ|cash (provided|used).{0,30}financ",
+  fx  = "effect of (exchange|foreign|currency)",
+  ## the roll-forward lines come from ROLL, defined with the resolver, so the
+  ## check and the resolver cannot disagree about which line is the net change
+  net = ROLL[["net"]], beg = ROLL[["beg"]], end = ROLL[["end"]],
+  ## A DISCONTINUED-OPERATIONS BLOCK IS A FOURTH TERM, NOT A SECTION. Abbott
+  ## 2004-2008 splits the statement into continuing and discontinued:
+  ##   Net Cash From Operating Activities of Continuing Operations    2,578,198
+  ##   Net Cash (Used in) Investing Activities of Continuing Ops     -3,273,521
+  ##   Net Cash From (Used in) Financing Activities of Continuing Ops    69,560
+  ##   Effect of exchange rates                                             852
+  ##   Net cash provided by discontinued operations                     861,360
+  ##   Net Increase in Cash and Cash Equivalents                        236,449
+  ## which foots exactly. But "cash provided by discontinued operations" also
+  ## satisfies the operating pattern, so taking the last match read operating
+  ## as 861,360 instead of 2,578,198 and put the column 2.6bn out - the same
+  ## last-match mistake as Walmart's held-for-sale line, in a new caption.
+  ## 16 of Abbott's 25 filings failed on this one line.
+  ##
+  ## The block's own total comes last, exactly as a section's subtotal does, so
+  ## the last match is the total and its components are not double counted.
+  disc = "discontinued operation")
+
+## `discontinued` is excluded from op/inv/fin so those pick the CONTINUING
+## subtotal, and carried as its own term instead.
+NOT <- c(net = ROLL_OTH, beg = ROLL_OTH, end = ROLL_OTH,
+         op = "discontinued", inv = "discontinued", fin = "discontinued")
+
 is_section_subtotal <- function(lab)
   Reduce(`|`, lapply(SUBTOT$SCF, function(p) grepl(p, lab, perl = TRUE)))
+
+## THE THIRD IDENTITY: SECTIONS + FX + ANYTHING BELOW THEM = NET CHANGE.
+## Abbott's 10-Q for June 2007 prints
+##   Net Cash From Operating Activities                              2,595,742
+##   Net Cash (Used in) Investing Activities                          -549,639
+##   Net Cash (Used in) From Financing Activities                   -1,038,878
+##   Effect of exchange rate changes on cash                            10,514
+##   Net cash provided by operating activities of discontinued ops       67,152
+##   Net Increase (Decrease) in Cash and Cash Equivalents            1,017,739
+## and the first four already sum to 1,017,739 - so the 67,152 does NOT belong
+## to the 2007 column at all. It is a single printed number on a two-column
+## row, filled from the left into the wrong column; the 2006 comparative is
+## short by exactly 67,152. The section pass cannot see the line (it sits
+## outside every section) and the roll-forward pass cannot either (beg + net
+## already closes), so the cell stayed unplaced and the column read as a
+## failure. This identity pins it exactly, column by column.
+resolve_netchange <- function(d) {
+  if (!any(d$col_unplaced)) return(d)
+  nc <- max(d$col_order)
+  if (nc < 2) return(d)
+  w   <- d[order(d$line_order, d$col_order), ]
+  ord <- unique(w$line_order)
+  lab <- tolower(trimws(w$line_label[match(ord, w$line_order)]))
+  vof <- function(i) {
+    s <- w$line_order == ord[i]
+    w$value_printed[s][order(w$col_order[s])]
+  }
+
+  ## the section subtotals: last match per section, discontinued excluded so
+  ## these are the continuing or combined subtotals, never a component
+  sec <- unlist(lapply(c("op", "inv", "fin"), function(k) {
+    i <- grep(PAT[[k]], lab, perl = TRUE)
+    i <- i[!grepl("discontinued", lab[i], perl = TRUE)]
+    if (length(i)) i[length(i)] else NULL
+  }))
+  if (!length(sec)) return(d)
+  inet <- grep(ROLL[["net"]], lab, perl = TRUE)
+  inet <- inet[!grepl(ROLL_OTH, lab[inet], perl = TRUE)]
+  if (length(inet) != 1) return(d)
+  net <- vof(inet)
+  if (any(is.na(net))) return(d)
+
+  tot <- rep(0, nc)
+  for (i in sec) { v <- vof(i); if (any(is.na(v))) return(d); tot <- tot + v }
+  ifx <- grep(PAT[["fx"]], lab, perl = TRUE)
+  if (length(ifx)) {
+    v <- vof(ifx[length(ifx)])
+    if (!any(is.na(v))) { tot <- tot + v; ifx <- ifx[length(ifx)] } else ifx <- integer()
+  }
+
+  ## candidates sit BELOW the last section subtotal and ABOVE the net-change
+  ## line; fx and the subtotals themselves are already in `tot`
+  lo   <- max(ord[sec]); hi <- ord[inet]
+  band <- setdiff(which(ord > lo & ord < hi), c(sec, ifx))
+  band <- band[vapply(band, function(i) !all(is.na(vof(i))) ||
+    any(w$col_unplaced[w$line_order == ord[i]]), logical(1))]
+  amb  <- band[vapply(band, function(i)
+    any(w$col_unplaced[w$line_order == ord[i]]), logical(1))]
+  ## ONE unplaced line only: with two, several splits of the gap satisfy the
+  ## identity and this would be guessing rather than solving
+  if (length(amb) != 1) return(d)
+
+  req <- net - tot
+  for (i in setdiff(band, amb)) {
+    v <- vof(i); if (any(is.na(v))) return(d); req <- req - v
+  }
+
+  vals <- vof(amb); vals <- vals[!is.na(vals)]
+  cc   <- which(abs(req) > FOOT_TOL)
+  if (!length(vals) || length(cc) != length(vals)) return(d)
+  if (any(abs(req[cc] - vals) > FOOT_TOL)) return(d)
+
+  nv <- rep(NA_real_, nc); nv[cc] <- vals
+  sel <- d$line_order == ord[amb]
+  d$value_printed[sel][order(d$col_order[sel])] <- nv
+  d$col_placed_by_footing[sel] <- TRUE
+  d$col_unplaced[sel] <- FALSE
+  d
+}
 
 resolve_rollforward <- function(d) {
   if (!any(d$col_unplaced)) return(d)
@@ -493,6 +610,7 @@ if (n_amb0) {
     ## the section pass left flagged.
     if (identical(st, "SCF"))
       d <- tryCatch(resolve_rollforward(d), error = function(e) d)
+      d <- tryCatch(resolve_netchange(d),   error = function(e) d)
     d
   }))
   ## amount is derived from value_printed, so recompute it after the move
@@ -530,36 +648,6 @@ cat(sprintf("amount NA but value present: %6d rows (scale unknown)\n",
 ##   beginning + net change = end
 ## Label wordings vary a lot, so the patterns are deliberately loose and the
 ## LAST match in a section is taken - the subtotal, not the section header.
-PAT <- c(
-  op  = "net cash.{0,40}operat|cash (provided|used).{0,30}operat",
-  inv = "net cash.{0,40}invest|cash (provided|used).{0,30}invest",
-  fin = "net cash.{0,40}financ|cash (provided|used).{0,30}financ",
-  fx  = "effect of (exchange|foreign|currency)",
-  ## the roll-forward lines come from ROLL, defined with the resolver, so the
-  ## check and the resolver cannot disagree about which line is the net change
-  net = ROLL[["net"]], beg = ROLL[["beg"]], end = ROLL[["end"]],
-  ## A DISCONTINUED-OPERATIONS BLOCK IS A FOURTH TERM, NOT A SECTION. Abbott
-  ## 2004-2008 splits the statement into continuing and discontinued:
-  ##   Net Cash From Operating Activities of Continuing Operations    2,578,198
-  ##   Net Cash (Used in) Investing Activities of Continuing Ops     -3,273,521
-  ##   Net Cash From (Used in) Financing Activities of Continuing Ops    69,560
-  ##   Effect of exchange rates                                             852
-  ##   Net cash provided by discontinued operations                     861,360
-  ##   Net Increase in Cash and Cash Equivalents                        236,449
-  ## which foots exactly. But "cash provided by discontinued operations" also
-  ## satisfies the operating pattern, so taking the last match read operating
-  ## as 861,360 instead of 2,578,198 and put the column 2.6bn out - the same
-  ## last-match mistake as Walmart's held-for-sale line, in a new caption.
-  ## 16 of Abbott's 25 filings failed on this one line.
-  ##
-  ## The block's own total comes last, exactly as a section's subtotal does, so
-  ## the last match is the total and its components are not double counted.
-  disc = "discontinued operation")
-
-## `discontinued` is excluded from op/inv/fin so those pick the CONTINUING
-## subtotal, and carried as its own term instead.
-NOT <- c(net = ROLL_OTH, beg = ROLL_OTH, end = ROLL_OTH,
-         op = "discontinued", inv = "discontinued", fin = "discontinued")
 
 grab <- function(lab, val, p, not = NA_character_) {
   lo <- tolower(lab)
