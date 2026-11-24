@@ -592,12 +592,35 @@ grab <- function(lab, val, p, not = NA_character_) {
 ## too, and gating on that double counted it from 203 of 203 columns down to
 ## 117. The test is whether an UNQUALIFIED subtotal exists: if one does it
 ## already includes discontinued, and the block must not be added again.
-sections_continuing_only <- function(lab) {
+## DECIDED BY POSITION, NOT BY CAPTION. Two caption rules were tried and both
+## broke, because Abbott alone prints three styles:
+##   2004  "...Operating Activities of Continuing Operations" + a discontinued
+##         block of its own below the sections, with its own total
+##   2006  "Net Cash From Operating Activities" - no qualifier at all - and
+##         STILL a discontinued line below financing that must be added
+##   Walmart "...of continuing operations", "...of discontinued operations",
+##         then the combined "Net cash provided by operating activities"
+## Gating on "a subtotal says continuing" double counted Walmart (203 -> 117
+## columns). Gating on "an unqualified subtotal exists" then missed Abbott 2006,
+## whose subtotals are unqualified yet exclude discontinued.
+##
+## Position settles it, because position is what decides whether a number is
+## already inside a subtotal: a discontinued line printed AFTER the last
+## section subtotal is a separate term, and one printed before it is a
+## component of the section it sits in and is already counted.
+grab_disc <- function(ord, lab, val) {
   lo <- tolower(lab)
-  i  <- unique(unlist(lapply(c("op", "inv", "fin"),
+  si <- unique(unlist(lapply(c("op", "inv", "fin"),
                              function(k) grep(PAT[[k]], lo, perl = TRUE))))
-  i  <- i[!grepl("discontinued", lo[i], perl = TRUE)]
-  length(i) > 0 && all(grepl("continuing", lo[i], perl = TRUE))
+  si <- si[!grepl("discontinued", lo[si], perl = TRUE)]
+  if (!length(si)) return(0)
+  di <- grep(PAT[["disc"]], lo, perl = TRUE)
+  di <- di[ord[di] > max(ord[si])]
+  if (!length(di)) return(0)
+  ## the block's own total comes last, exactly as a section's subtotal does,
+  ## so its components are not double counted
+  v <- val[di[which.max(ord[di])]]
+  if (is.na(v)) 0 else v
 }
 
 grab_oth <- function(lab, val) {
@@ -631,8 +654,7 @@ foot <- L %>%
     beg = grab(line_label, value_printed, PAT[["beg"]], NOT[["beg"]]),
     end = grab(line_label, value_printed, PAT[["end"]], NOT[["end"]]),
     oth = grab_oth(line_label, value_printed),
-    disc = grab(line_label, value_printed, PAT[["disc"]]),
-    sec_cont = sections_continuing_only(line_label),
+    disc = grab_disc(line_order, line_label, value_printed),
     op_usd  = grab(line_label, amount, PAT[["op"]],  NOT[["op"]]),
     inv_usd = grab(line_label, amount, PAT[["inv"]], NOT[["inv"]]),
     fin_usd = grab(line_label, amount, PAT[["fin"]], NOT[["fin"]]),
@@ -652,8 +674,8 @@ foot <- L %>%
     ## At least one section must be found, or there is nothing to test.
     n_sec = (!is.na(op)) + (!is.na(inv)) + (!is.na(fin)),
     ## the discontinued block is added ONLY where the sections are captioned
-    ## as continuing-only; see sec_continuing()
-    disc_term = ifelse(sec_cont, coalesce(disc, 0), 0),
+    ## position decides whether it is already counted; see grab_disc()
+    disc_term = coalesce(disc, 0),
     sum_sections = ifelse(n_sec == 0, NA_real_,
                           rowSums(cbind(op, inv, fin, coalesce(fx, 0),
                                         disc_term), na.rm = TRUE)),
