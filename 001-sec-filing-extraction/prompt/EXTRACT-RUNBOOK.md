@@ -53,9 +53,18 @@ Rscript 001-sec-filing-extraction/001i-claim-extract-batch.R
 BATCH=extract-matt-20261123-162000 Rscript 001-sec-filing-extraction/001j-file-extract-batch.R
 ```
 
-Repeat as tokens allow. `inv_progress()` shows where both of you are. Re-run
-`001a-build-filing-inventory.R` when you want the inventory parquet to catch up
-with the logs.
+**Re-run `001a-build-filing-inventory.R` before claiming your next batch.** Not
+optional, and not only when you feel like it. Step 1 picks work from the
+inventory parquet, which is a cached join: the progress logs are the source of
+truth, but the cache does not know about them until it is rebuilt. Claim twice
+without rebuilding and you are handed **the identical filings**, which is how
+the second 500-statement wave came back with a 500 of 500 overlap with the
+first. The filing step now refuses to store a filing under two batch names, so
+the mistake costs transcription tokens rather than a corrupted dataset — but
+the tokens are the expensive part. Confirm it worked by checking that
+`inv_progress()` shows a non-zero `n_extracted` for you.
+
+Repeat as tokens allow. `inv_progress()` shows where both of you are.
 
 A filing the model marked `found: false`, or skipped, is **not** logged — it
 comes back in a later batch. That is deliberate; see the header of `001j`.

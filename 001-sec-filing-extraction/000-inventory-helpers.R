@@ -66,6 +66,31 @@ inv <- function() {
 ## claim and were re-scanned on every wave, so the frontier advanced ~500
 ## filings per 18-minute wave instead of 24,000 per 90, and the 70,398 filings
 ## behind them (the newest filers, every CIK above ~1.55M) were never reached.
+## THE LOGS OVERRULE THE CACHE, BECAUSE THE CACHE GOES STALE AND HANDING OUT
+## WORK TWICE IS EXPENSIVE. inv() reads filing_inventory.parquet, which is a
+## cached join rebuilt by 001a; the append-only progress logs are the source of
+## truth and the cache knows nothing of them until it is rebuilt. Claiming two
+## batches without a rebuild in between therefore returned THE SAME filings -
+## measured at a 500 of 500 overlap on the second 500-statement wave, caught
+## only because the manifests were compared by hand. So the logs are now
+## subtracted here as well. Rebuilding with 001a is still worth doing (it is
+## what makes inv_progress() accurate), but forgetting it no longer costs a
+## wave of transcription.
+.logged <- function(stages) {
+  d <- paste0(.sec_dir(), "/logs")
+  fs <- list.files(d, pattern = "^progress_.*[.]csv$", full.names = TRUE)
+  if (!length(fs)) return(character())
+  out <- unlist(lapply(fs, function(f) {
+    x <- tryCatch(suppressWarnings(readr::read_csv(
+      f, show_col_types = FALSE,
+      col_types = readr::cols(.default = readr::col_character()))),
+      error = function(e) NULL)
+    if (is.null(x) || !all(c("accession", "stage") %in% names(x))) return(character())
+    x$accession[x$stage %in% stages]
+  }), use.names = FALSE)
+  unique(out[!is.na(out)])
+}
+
 inv_todo <- function(stage = c("collect", "extract"), n = 250,
                      mine_only = TRUE, who = NULL) {
   stage <- match.arg(stage)
@@ -76,6 +101,9 @@ inv_todo <- function(stage = c("collect", "extract"), n = 250,
   if (!"no_text" %in% names(d)) d$no_text <- FALSE
   d <- if (stage == "collect") d |> filter(!collected, !no_text)
        else                    d |> filter(collected, !extracted)
+  ## a filing already logged at this stage is done whatever the cache says
+  done <- .logged(if (stage == "collect") c("collected", "notext") else "extracted")
+  if (length(done)) d <- d |> filter(!accession %in% done)
   d |> arrange(batch, cik, period_end) |> head(n)
 }
 
