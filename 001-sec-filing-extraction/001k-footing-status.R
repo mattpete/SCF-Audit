@@ -63,6 +63,24 @@ st <- F |>
                             TRUE        ~ "ok"),
          pct_ok = round(100 * n_ok / n_cols, 1))
 
+## ---- carry the wrong-entity flag alongside the arithmetic ------------------
+## A statement belonging to another company passes every arithmetic check, so
+## the two findings have to be read together: "adds up" is not "is the right
+## company". 001m writes the flag; it is joined here rather than recomputed so
+## there is one definition of it. Absent file => no flag, not a clean bill.
+EF <- paste0(OD, "/entity_flags.csv")
+if (file.exists(EF)) {
+  ef <- read_csv(EF, show_col_types = FALSE,
+                 col_types = cols(.default = col_character(),
+                                  entity_mismatch = col_logical())) |>
+    select(accession, entity_named, entity_mismatch) |> distinct(accession, .keep_all = TRUE)
+  st <- st |> left_join(ef, by = "accession") |>
+    mutate(entity_mismatch = coalesce(entity_mismatch, FALSE))
+} else {
+  st$entity_named <- NA_character_
+  st$entity_mismatch <- NA   # unknown, not FALSE - 001m has not been run
+}
+
 write_csv(st, paste0(OD, "/footing_status.csv"))
 
 q <- st |> filter(status != "ok") |> arrange(status, cik, fdate)
@@ -82,6 +100,17 @@ print(as.data.frame(st |> group_by(year) |>
   summarise(filings = n(), clean = sum(status == "ok"),
             pct = round(100 * clean / filings, 1), .groups = "drop")),
   row.names = FALSE)
+
+if (isTRUE(any(st$entity_mismatch))) {
+  em <- st |> filter(entity_mismatch)
+  cat(sprintf("\n!! %d filing(s) print ANOTHER COMPANY'S statement (%.1f%%).\n",
+              nrow(em), 100 * nrow(em) / nrow(st)))
+  cat("   Every arithmetic check passes on these - a parent's or affiliate's\n")
+  cat("   statement is internally consistent - so they are only visible here.\n")
+  cat(sprintf("   Of them, %d also foot cleanly and would look perfect.\n",
+              sum(em$status == "ok")))
+  print(as.data.frame(em |> count(coname, entity_named, sort = TRUE)), row.names = FALSE)
+}
 
 if (nrow(q)) {
   cat("\n--- scan queue (", nrow(q), " filings ) ---\n", sep = "")
