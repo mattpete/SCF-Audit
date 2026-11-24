@@ -537,9 +537,29 @@ PAT <- c(
   fx  = "effect of (exchange|foreign|currency)",
   ## the roll-forward lines come from ROLL, defined with the resolver, so the
   ## check and the resolver cannot disagree about which line is the net change
-  net = ROLL[["net"]], beg = ROLL[["beg"]], end = ROLL[["end"]])
+  net = ROLL[["net"]], beg = ROLL[["beg"]], end = ROLL[["end"]],
+  ## A DISCONTINUED-OPERATIONS BLOCK IS A FOURTH TERM, NOT A SECTION. Abbott
+  ## 2004-2008 splits the statement into continuing and discontinued:
+  ##   Net Cash From Operating Activities of Continuing Operations    2,578,198
+  ##   Net Cash (Used in) Investing Activities of Continuing Ops     -3,273,521
+  ##   Net Cash From (Used in) Financing Activities of Continuing Ops    69,560
+  ##   Effect of exchange rates                                             852
+  ##   Net cash provided by discontinued operations                     861,360
+  ##   Net Increase in Cash and Cash Equivalents                        236,449
+  ## which foots exactly. But "cash provided by discontinued operations" also
+  ## satisfies the operating pattern, so taking the last match read operating
+  ## as 861,360 instead of 2,578,198 and put the column 2.6bn out - the same
+  ## last-match mistake as Walmart's held-for-sale line, in a new caption.
+  ## 16 of Abbott's 25 filings failed on this one line.
+  ##
+  ## The block's own total comes last, exactly as a section's subtotal does, so
+  ## the last match is the total and its components are not double counted.
+  disc = "discontinued operation")
 
-NOT <- c(net = ROLL_OTH, beg = ROLL_OTH, end = ROLL_OTH)
+## `discontinued` is excluded from op/inv/fin so those pick the CONTINUING
+## subtotal, and carried as its own term instead.
+NOT <- c(net = ROLL_OTH, beg = ROLL_OTH, end = ROLL_OTH,
+         op = "discontinued", inv = "discontinued", fin = "discontinued")
 
 grab <- function(lab, val, p, not = NA_character_) {
   lo <- tolower(lab)
@@ -558,6 +578,28 @@ grab <- function(lab, val, p, not = NA_character_) {
 ## and 17,788 - 4,802 + 1,848 = 14,834 exactly. So a cash movement that is
 ## neither one of the three sections nor the net-change line still moves the
 ## cash balance: drop it from the section sum, keep it in the roll-forward.
+## IS THE DISCONTINUED BLOCK A SEPARATE TERM, OR ALREADY INSIDE THE SECTIONS?
+## Both presentations exist and they need opposite handling, so this cannot be
+## decided from the discontinued line alone. Walmart 2003-2008 prints THREE
+## lines per section and the combined total comes last:
+##   Net cash provided by operating activities of continuing operations    2,614
+##   Net cash provided by operating activities of discontinued operations     39
+##   Net cash provided by operating activities                             2,653
+## Abbott prints only the continuing subtotal and puts discontinued in its own
+## block below the three sections, with no combined line anywhere.
+##
+## So the test is NOT "does a subtotal mention continuing" - Walmart's does
+## too, and gating on that double counted it from 203 of 203 columns down to
+## 117. The test is whether an UNQUALIFIED subtotal exists: if one does it
+## already includes discontinued, and the block must not be added again.
+sections_continuing_only <- function(lab) {
+  lo <- tolower(lab)
+  i  <- unique(unlist(lapply(c("op", "inv", "fin"),
+                             function(k) grep(PAT[[k]], lo, perl = TRUE))))
+  i  <- i[!grepl("discontinued", lo[i], perl = TRUE)]
+  length(i) > 0 && all(grepl("continuing", lo[i], perl = TRUE))
+}
+
 grab_oth <- function(lab, val) {
   lo <- tolower(lab)
   i  <- grep(ROLL_OTH_PAT, lo, perl = TRUE)
@@ -581,20 +623,40 @@ foot <- L %>%
     ##
     ## The dollar values are kept beside them, so a reader still sees the
     ## section totals in the units the rest of the frame uses.
-    op  = grab(line_label, value_printed, PAT[["op"]]),
-    inv = grab(line_label, value_printed, PAT[["inv"]]),
-    fin = grab(line_label, value_printed, PAT[["fin"]]),
+    op  = grab(line_label, value_printed, PAT[["op"]],  NOT[["op"]]),
+    inv = grab(line_label, value_printed, PAT[["inv"]], NOT[["inv"]]),
+    fin = grab(line_label, value_printed, PAT[["fin"]], NOT[["fin"]]),
     fx  = grab(line_label, value_printed, PAT[["fx"]]),
     net = grab(line_label, value_printed, PAT[["net"]], NOT[["net"]]),
     beg = grab(line_label, value_printed, PAT[["beg"]], NOT[["beg"]]),
     end = grab(line_label, value_printed, PAT[["end"]], NOT[["end"]]),
     oth = grab_oth(line_label, value_printed),
-    op_usd  = grab(line_label, amount, PAT[["op"]]),
-    inv_usd = grab(line_label, amount, PAT[["inv"]]),
-    fin_usd = grab(line_label, amount, PAT[["fin"]]),
+    disc = grab(line_label, value_printed, PAT[["disc"]]),
+    sec_cont = sections_continuing_only(line_label),
+    op_usd  = grab(line_label, amount, PAT[["op"]],  NOT[["op"]]),
+    inv_usd = grab(line_label, amount, PAT[["inv"]], NOT[["inv"]]),
+    fin_usd = grab(line_label, amount, PAT[["fin"]], NOT[["fin"]]),
     n_lines = n(), .groups = "drop") %>%
   mutate(
-    sum_sections = rowSums(cbind(op, inv, fin, coalesce(fx, 0)), na.rm = FALSE),
+    ## A SECTION THAT IS NOT PRINTED COUNTS AS ZERO, AND THAT IS SAFE. Adams
+    ## Resources' 10-Qs print no financing section at all, so demanding all
+    ## three left 15 of its 17 filings untestable although operating +
+    ## investing equals the printed net change exactly (-9,825 - 3,364 =
+    ## -13,189) AND the cash balance rolls forward exactly (36,140 - 13,189 =
+    ## 22,951). Two independent confirmations, thrown away over an absence.
+    ##
+    ## Treating the absence as zero cannot hide a truncated statement: if the
+    ## section really was there with a non-zero total, the identity stops
+    ## closing and the column is flagged. The only case it silently passes is a
+    ## section that is missing AND zero, where zero is the right answer anyway.
+    ## At least one section must be found, or there is nothing to test.
+    n_sec = (!is.na(op)) + (!is.na(inv)) + (!is.na(fin)),
+    ## the discontinued block is added ONLY where the sections are captioned
+    ## as continuing-only; see sec_continuing()
+    disc_term = ifelse(sec_cont, coalesce(disc, 0), 0),
+    sum_sections = ifelse(n_sec == 0, NA_real_,
+                          rowSums(cbind(op, inv, fin, coalesce(fx, 0),
+                                        disc_term), na.rm = TRUE)),
     diff_net     = sum_sections - net,
     diff_roll    = (beg + net + coalesce(oth, 0)) - end,
     ## A tolerance, because a filer computes a subtotal on exact figures and
