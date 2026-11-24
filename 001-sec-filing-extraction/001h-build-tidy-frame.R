@@ -226,6 +226,106 @@ FOOT_TOL <- 1       # printed units, so $1k in a thousands statement
 ## where a tie is most likely anyway.
 MAX_COMB <- 20000
 
+## ---- the cash roll-forward, used by the resolver AND the footing check -----
+## Defined once here so the two cannot disagree about which line is which.
+##   beginning cash + net change + any other cash movement = ending cash
+ROLL <- c(net = "(net |)(increase|decrease|change).{0,40}in cash",
+          ## SPLIT CASH-BALANCE LABELS. Some filers print a "CASH AND CASH
+          ## EQUIVALENTS" header and then bare "Beginning of period" / "End of
+          ## period" beneath it, so the balance labels contain no cash word at
+          ## all - K-Tron International 10-Q 2002-03-30, where requiring "cash"
+          ## left beg/end NA and the check then reported a roll-forward failure
+          ## on a statement that footed to the penny.
+          beg = "cash.{0,50}beginning|^\\(?beginning (of|balance)",
+          end = "cash.{0,50}end of|^\\(?end (of|balance)")
+
+## LINES THAT LOOK LIKE THE NET-CHANGE LINE AND ARE NOT IT. Walmart FY2021-FY2024
+## prints "Change in cash and cash equivalents reclassified from (to) assets
+## held for sale" BELOW the real net-change line, so taking the last match read
+## net as 1,848 in every period - the same number each time, which is the tell.
+## All 11 Walmart footing failures and all 10 of its untestable columns were
+## this one line; the transcriptions themselves were exact.
+##
+## They are excluded from the SECTION sum and kept in the ROLL-FORWARD, because
+## such a line still moves the cash balance:
+##   17,788 - 4,802 + 1,848 = 14,834  (Walmart FY2022, exactly).
+## Restricted cash is deliberately NOT excluded: after ASU 2016-18 "cash, cash
+## equivalents and restricted cash" IS the correct caption.
+ROLL_OTH <- "held for sale|reclassif|classified as|discontinued"
+
+## ...and they are matched on their OWN shape, not as an exception to the
+## net-change pattern, because the caption is not always a "change in cash"
+## sentence. Walmart's FY2021 10-K prints "Cash and cash equivalents
+## reclassified as assets held for sale (1,848)", which contains no
+## increase/decrease/change wording at all - so keying off the net-change
+## pattern missed it and left that one column failing. Requiring a cash word
+## AND a qualifier keeps the beginning/ending balance lines out, since neither
+## carries a qualifier.
+##
+## "discontinued" is deliberately NOT a qualifier here, although it IS one in
+## ROLL_OTH above. Walmart 2004-2008 prints "Net cash provided by operating
+## activities of discontinued operations" INSIDE the operating section, so it
+## is already inside that subtotal; adding it to the roll-forward double-counts
+## it and broke 15 previously-footing columns. Only a movement printed outside
+## the three sections belongs here, and the SUBTOT guard below is the second
+## line of defence against exactly that mistake.
+ROLL_OTH_PAT <- local({
+  q <- "held for sale|reclassif|classified as"
+  paste0("(cash|equivalents).{0,80}(", q, ")|(", q, ").{0,40}(cash|equivalents)")
+})
+is_section_subtotal <- function(lab)
+  Reduce(`|`, lapply(SUBTOT$SCF, function(p) grepl(p, lab, perl = TRUE)))
+
+resolve_rollforward <- function(d) {
+  if (!any(d$col_unplaced)) return(d)
+  nc <- max(d$col_order)
+  if (nc < 2) return(d)
+  w   <- d[order(d$line_order, d$col_order), ]
+  ord <- unique(w$line_order)
+  lab <- tolower(trimws(w$line_label[match(ord, w$line_order)]))
+  vof <- function(i) w$value_printed[w$line_order == ord[i]][order(w$col_order[w$line_order == ord[i]])]
+
+  ## the three anchors must each resolve to exactly one line and be fully
+  ## printed; anything less and the identity cannot pin a cell
+  pick <- function(p) {
+    i <- grep(p, lab, perl = TRUE)
+    i[!grepl(ROLL_OTH, lab[i], perl = TRUE)]
+  }
+  inet <- pick(ROLL[["net"]]); ibeg <- pick(ROLL[["beg"]])
+  iend <- pick(ROLL[["end"]])
+  ioth <- grep(ROLL_OTH_PAT, lab, perl = TRUE)
+  ioth <- ioth[!is_section_subtotal(lab[ioth])]
+  if (length(inet) != 1 || length(ibeg) != 1 || length(iend) != 1) return(d)
+  ## ONE unplaced line only. With two, several splits of the gap satisfy the
+  ## identity and the resolver would be guessing; the existing section pass
+  ## declines on a tie for the same reason, so do the same here.
+  amb <- ioth[vapply(ioth, function(i)
+    any(w$col_unplaced[w$line_order == ord[i]]), logical(1))]
+  if (length(amb) != 1) return(d)
+  fixed <- setdiff(ioth, amb)
+
+  net <- vof(inet); beg <- vof(ibeg); end <- vof(iend)
+  if (any(is.na(net)) || any(is.na(beg)) || any(is.na(end))) return(d)
+  req <- end - beg - net
+  for (i in fixed) {
+    v <- vof(i); if (any(is.na(v))) return(d); req <- req - v
+  }
+
+  ## the printed numbers, in the order printed, must BE the non-zero gaps -
+  ## same count, same values, same order. No search, no reordering.
+  vals <- vof(amb); vals <- vals[!is.na(vals)]
+  cc   <- which(abs(req) > FOOT_TOL)
+  if (!length(vals) || length(cc) != length(vals)) return(d)
+  if (any(abs(req[cc] - vals) > FOOT_TOL)) return(d)
+
+  nv <- rep(NA_real_, nc); nv[cc] <- vals
+  sel <- d$line_order == ord[amb]
+  d$value_printed[sel][order(d$col_order[sel])] <- nv
+  d$col_placed_by_footing[sel] <- TRUE
+  d$col_unplaced[sel] <- FALSE
+  d
+}
+
 resolve_unplaced <- function(d, stmt) {
   if (!any(d$col_unplaced)) return(d)
   SB <- SUBTOT[[stmt]]
@@ -385,7 +485,15 @@ if (n_amb0) {
   L <- bind_rows(lapply(split(L, paste(L$wrdsfname, L$statement)), function(d) {
     st <- unique(d$statement)
     if (!any(d$col_unplaced) || length(st) != 1 || !st %in% names(SUBTOT)) return(d)
-    tryCatch(resolve_unplaced(d, st), error = function(e) d)
+    d <- tryCatch(resolve_unplaced(d, st), error = function(e) d)
+    ## The section pass only sees lines that belong to a section, so a cash
+    ## movement printed BELOW the financing subtotal is invisible to it - all 94
+    ## of Walmart's unresolved cells were that one held-for-sale line. The
+    ## roll-forward identity pins those exactly, so run it second on whatever
+    ## the section pass left flagged.
+    if (identical(st, "SCF"))
+      d <- tryCatch(resolve_rollforward(d), error = function(e) d)
+    d
   }))
   ## amount is derived from value_printed, so recompute it after the move
   L$amount <- ifelse(L$unscaled_row, L$value_printed, L$value_printed * L$mult)
@@ -427,14 +535,35 @@ PAT <- c(
   inv = "net cash.{0,40}invest|cash (provided|used).{0,30}invest",
   fin = "net cash.{0,40}financ|cash (provided|used).{0,30}financ",
   fx  = "effect of (exchange|foreign|currency)",
-  net = "(net |)(increase|decrease|change).{0,40}in cash",
-  beg = "cash.{0,50}beginning",
-  end = "cash.{0,50}end of")
+  ## the roll-forward lines come from ROLL, defined with the resolver, so the
+  ## check and the resolver cannot disagree about which line is the net change
+  net = ROLL[["net"]], beg = ROLL[["beg"]], end = ROLL[["end"]])
 
-grab <- function(lab, val, p) {
-  i <- grep(p, tolower(lab), perl = TRUE)
+NOT <- c(net = ROLL_OTH, beg = ROLL_OTH, end = ROLL_OTH)
+
+grab <- function(lab, val, p, not = NA_character_) {
+  lo <- tolower(lab)
+  i  <- grep(p, lo, perl = TRUE)
+  if (!is.na(not)) i <- i[!grepl(not, lo[i], perl = TRUE)]
   if (!length(i)) return(NA_real_)
   val[i[length(i)]]
+}
+
+## THE EXCLUDED CASH LINES ARE NOT NOISE - THEY BELONG TO THE ROLL-FORWARD.
+## Walmart FY2022 prints
+##   Net increase (decrease) in cash ...     -4,802
+##   Change in cash reclassified ... held for sale   1,848
+##   Beginning of year                       17,788
+##   End of year                             14,834
+## and 17,788 - 4,802 + 1,848 = 14,834 exactly. So a cash movement that is
+## neither one of the three sections nor the net-change line still moves the
+## cash balance: drop it from the section sum, keep it in the roll-forward.
+grab_oth <- function(lab, val) {
+  lo <- tolower(lab)
+  i  <- grep(ROLL_OTH_PAT, lo, perl = TRUE)
+  i  <- i[!is_section_subtotal(lo[i])]
+  if (!length(i)) return(0)
+  sum(val[i], na.rm = TRUE)
 }
 
 foot <- L %>%
@@ -456,9 +585,10 @@ foot <- L %>%
     inv = grab(line_label, value_printed, PAT[["inv"]]),
     fin = grab(line_label, value_printed, PAT[["fin"]]),
     fx  = grab(line_label, value_printed, PAT[["fx"]]),
-    net = grab(line_label, value_printed, PAT[["net"]]),
-    beg = grab(line_label, value_printed, PAT[["beg"]]),
-    end = grab(line_label, value_printed, PAT[["end"]]),
+    net = grab(line_label, value_printed, PAT[["net"]], NOT[["net"]]),
+    beg = grab(line_label, value_printed, PAT[["beg"]], NOT[["beg"]]),
+    end = grab(line_label, value_printed, PAT[["end"]], NOT[["end"]]),
+    oth = grab_oth(line_label, value_printed),
     op_usd  = grab(line_label, amount, PAT[["op"]]),
     inv_usd = grab(line_label, amount, PAT[["inv"]]),
     fin_usd = grab(line_label, amount, PAT[["fin"]]),
@@ -466,7 +596,7 @@ foot <- L %>%
   mutate(
     sum_sections = rowSums(cbind(op, inv, fin, coalesce(fx, 0)), na.rm = FALSE),
     diff_net     = sum_sections - net,
-    diff_roll    = (beg + net) - end,
+    diff_roll    = (beg + net + coalesce(oth, 0)) - end,
     ## A tolerance, because a filer computes a subtotal on exact figures and
     ## then rounds, so rounded components need not sum to the rounded
     ## subtotal. On PRINTED figures that tolerance is one printed unit,
@@ -474,20 +604,37 @@ foot <- L %>%
     tol          = 1,
     foots_net    = !is.na(diff_net)  & abs(diff_net)  <= tol,
     foots_roll   = !is.na(diff_roll) & abs(diff_roll) <= tol,
-    testable_net = !is.na(sum_sections) & !is.na(net),
+    ## UNTESTED IS NOT FAILED, AND THE DIFFERENCE COSTS MONEY. The verdict
+    ## decides whether a statement is re-read on a more expensive model, so a
+    ## column whose roll-forward was never printed must not be reported as a
+    ## roll-forward failure. K-Tron's 2002 10-Q footed to the penny and was
+    ## called a failure purely because its cash balances carried no cash word.
+    testable_net  = !is.na(sum_sections) & !is.na(net),
+    testable_roll = !is.na(beg) & !is.na(net) & !is.na(end),
     verdict      = case_when(
-      !testable_net                 ~ "not testable",
-      foots_net & foots_roll        ~ "foots",
-      foots_net                     ~ "sections foot, roll-forward does not",
-      TRUE                          ~ "FAILS"))
+      !testable_net           ~ "not testable",
+      !foots_net              ~ "FAILS",
+      !testable_roll          ~ "foots (no roll-forward printed)",
+      foots_roll              ~ "foots",
+      TRUE                    ~ "sections foot, roll-forward does not"))
 
 cat("\n=== cash flow footing, by period-column ===\n")
 print(table(foot$verdict))
-cat(sprintf("\nescalation rate (FAILS or not testable): %.1f%% of %d columns\n",
-            100 * mean(foot$verdict != "foots"), nrow(foot)))
 
-esc <- foot %>% filter(verdict != "foots") %>%
+## ESCALATE ONLY AN ARITHMETIC CONTRADICTION. "not testable" means a subtotal
+## was never found, which is usually the locator handing over a truncated
+## statement (K-Tron FY2001 lost its financing section at a page break) - a
+## stronger reader cannot recover text that is not there, so those go to a
+## review queue instead of to a paid re-read.
+foots_ok <- c("foots", "foots (no roll-forward printed)")
+esc <- foot %>% filter(!verdict %in% c(foots_ok, "not testable")) %>%
   distinct(wrdsfname) %>% pull(wrdsfname)
+rev <- foot %>% filter(verdict == "not testable") %>%
+  distinct(wrdsfname) %>% pull(wrdsfname)
+cat(sprintf("\ncolumns that foot: %.1f%% of %d\n",
+            100 * mean(foot$verdict %in% foots_ok), nrow(foot)))
+cat(sprintf("columns to review (subtotal not found): %d\n",
+            sum(foot$verdict == "not testable")))
 cat(sprintf("filings to escalate to a stronger model: %d of %d (%.1f%%)\n",
             length(esc), length(unique(foot$wrdsfname)),
             100 * length(esc) / max(1, length(unique(foot$wrdsfname)))))
@@ -497,6 +644,7 @@ write_parquet(L,    paste0(SP, "scf_text_lines.parquet"))
 write_parquet(foot, paste0(SP, "scf_text_foot.parquet"))
 write.csv(L, paste0(SP, "scf_text_lines.csv"), row.names = FALSE, na = "")
 writeLines(esc, paste0(SP, "escalate.txt"))
+writeLines(rev, paste0(SP, "review.txt"))
 
 cat("\nwrote scf_text_lines.parquet (", nrow(L), " rows ), ",
     "scf_text_foot.parquet (", nrow(foot), " rows ), escalate.txt\n", sep = "")
