@@ -77,7 +77,14 @@
           },
           "u": {
             "type": "boolean",
-            "description": "True if the row printed FEWER numbers than there are columns, so which column each one belongs to cannot be read off the page. The numbers were placed left to right as a default and the placement is unverified. False whenever the count matches the number of columns, and false for a row with no numbers at all."
+            "description": "True if this row's numbers could not be matched to columns from the page alone - either it printed FEWER numbers than there are columns, or MORE. The numbers were placed left to right as a default and the placement is unverified. False whenever the count matches the number of columns, and false for a row with no numbers at all."
+          },
+          "va": {
+            "type": "array",
+            "description": "Present ONLY on a row that printed MORE numbers than there are columns: every number the row printed, in printed order, including those that fitted in v. It exists so a surplus figure is never dropped - a dropped figure is invisible downstream, showing up only as a section that fails to add up, with nothing to say why. Omit this field entirely on every other row.",
+            "items": {
+              "anyOf": [{ "type": "number" }, { "type": "null" }]
+            }
           }
         }
       }

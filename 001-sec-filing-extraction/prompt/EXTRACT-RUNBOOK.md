@@ -97,8 +97,14 @@ comes back in a later batch. That is deliberate; see the header of `001j`.
 > - Work in groups of about 3 files, then continue. Do not read the whole batch
 >   at once; large reads get truncated silently in the middle of a number.
 >
-> **Step 4.** Before writing each file, check: every row's `v` is exactly as long
-> as `columns`, and `n` runs 1,2,3,… with no gaps or repeats.
+> **Step 4.** Before writing each file, check — do not eyeball it: every row's
+> `v` is exactly as long as `columns`, and `n` runs 1,2,3,… with no gaps or
+> repeats. If a row printed MORE numbers than there are columns, re-count the
+> columns and check whether two rows ran together before anything else; only
+> then keep the first `columns` numbers, set `u` true, and list every printed
+> number in `va`. Never drop a printed figure and never write such a row as all
+> nulls — a dropped figure is invisible downstream, surfacing only as a section
+> that fails to add up, with nothing to say why.
 >
 > **Step 5.** When every `c###.txt` has a `res/c###.json`, stop and say so.
 > Report how many you wrote and list any you returned `found: false` for, with

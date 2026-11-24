@@ -105,10 +105,13 @@ rows    One entry per printed line of the statement, in printed order:
              when it says "except per share data". Earnings per share of 1.23
              is $1.23, never $1,230. Set x true on those rows and false on every
              ordinary dollar row.
-          u  true if the row printed FEWER numbers than there are columns, so
-             which column each number belongs to cannot be read off the page.
-             See "A ROW WITH FEWER NUMBERS THAN COLUMNS" below. False whenever
-             the count matches, and false for a label-only row.
+          u  true if the row's numbers could NOT be matched to columns off the
+             page - either it printed FEWER numbers than there are columns, or
+             MORE. See the two sections below. False whenever the count matches,
+             and false for a label-only row.
+          va present ONLY on a row that printed more numbers than there are
+             columns: every number it printed, in printed order, so that the
+             surplus is not lost. Omit it on every other row.
 
 A ROW WITH FEWER NUMBERS THAN COLUMNS
 
@@ -141,8 +144,49 @@ subtotal, which is arithmetic that can be checked. A placement you worked out
 in your head cannot be checked, and a row you silently moved looks identical
 to a row that was printed that way.
 
-This is the ONE case where v may not reflect the page. Everywhere else v is
-what is printed.
+A ROW WITH MORE NUMBERS THAN COLUMNS
+
+This is rarer and it is handled differently, because here you have numbers with
+nowhere to put them and the temptation is to throw them away. Do not. Ace
+Hardware's 10-K/A printed
+
+    Proceeds from issuance of long-term debt
+    70,000
+    (2,953
+    1,400
+
+three numbers against what had been read as two columns. They were written out
+as a row of nulls, and 70,000 and (2,953) - both plainly on the page -
+vanished. That is the worst available outcome: the section then fails to add up
+and nothing in the output says why, so it looks like a filing whose own
+arithmetic is broken rather than a transcription that lost two figures.
+
+A surplus almost always means something ELSE was read wrong, so check these two
+things first and in this order:
+
+  1. The column count. A statement with three year columns read as two makes
+     every three-number row look like a surplus. Go back to the headings and
+     count them again. If there really is another column, fix columns and the
+     row resolves with nothing left over.
+
+  2. Whether two printed rows ran together. In the cell-per-line layout a label
+     that did not print leaves its numbers sitting under the row above, so one
+     label appears to own both rows' figures. If that is what happened, emit the
+     rows that were actually printed, which also fixes n.
+
+Only if neither applies:
+
+  - put the first `columns` numbers in v, left to right, so v is still exactly
+    as long as columns;
+  - set u true, because the placement is now unverified;
+  - put EVERY number the row printed, in printed order, in va - all of them,
+    including the ones that did fit in v. va exists so that nothing on the page
+    is lost and the row can be rebuilt later.
+
+Never write the row as all nulls, and never drop a printed number.
+
+v MAY NOT REFLECT THE PAGE IN THESE TWO CASES ONLY - a row with fewer numbers
+than columns, and a row with more. Everywhere else v is what is printed.
 
         Rules for v:
           - v must always have exactly as many entries as columns. Always.
@@ -150,6 +194,10 @@ what is printed.
             still occupies its position.
           - If the row printed fewer numbers than there are columns, fill from
             the left, pad with null, and set u true. See above.
+          - If the row printed MORE numbers than there are columns, re-count
+            the columns and check for two rows run together first; failing
+            that, keep the first `columns` numbers, set u true, and list every
+            printed number in va. Never drop one. See above.
           - Parentheses mean negative: (1,234) is -1234.
           - Strip thousands separators, currency symbols and footnote markers.
             $ 1,234 is 1234. 1,234(2) is 1234.

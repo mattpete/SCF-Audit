@@ -105,6 +105,15 @@ one <- function(r) {
     ## filled v from the left and the placement is unverified. Resolved below
     ## by footing, never by the model. See resolve_unplaced().
     unres <- isTRUE(rr$u)
+    ## `va` - present only where the row printed MORE numbers than there are
+    ## columns. The surplus has nowhere to go in a rectangular frame, so it is
+    ## carried as text: a reviewer can see what the page actually held and the
+    ## redo list can rebuild the row. Without it those figures are simply
+    ## absent, and the only symptom is a section that does not add up with
+    ## nothing to say why - which is how 70,000 and (2,953) were lost from an
+    ## Ace Hardware 10-K/A before the spec had a rule for this.
+    va   <- rr$va
+    over <- length(va) > nc
     out[[i]] <- data.frame(
       line_order    = as.integer(rr$n %||% i),
       line_label    = as.character(rr$l %||% ""),
@@ -116,6 +125,12 @@ one <- function(r) {
       unscaled_row  = noscale,
       len_mismatch  = bad,
       col_unplaced  = unres,
+      row_overcount = over,
+      ## a person reads this column, so a blank cell shows as "-" rather than
+      ## as nothing between two pipes
+      row_printed   = if (over) paste(vapply(va, function(z)
+        if (is.null(z)) "-" else format(as.numeric(z), scientific = FALSE),
+        character(1)), collapse = " | ") else NA_character_,
       stringsAsFactors = FALSE)
   }
   d <- bind_rows(out)
@@ -627,7 +642,7 @@ L <- L %>% select(wrdsfname, cik, coname, form, fdate, rdate,
                   value_printed, scale, mult, scale_assumed_ones,
                   unscaled_row, amount,
                   col_unplaced, col_placed_by_footing,
-                  len_mismatch) %>%
+                  len_mismatch, row_overcount, row_printed) %>%
   arrange(wrdsfname, statement, line_order, col_order)
 
 ## ---- what the frame is missing, stated rather than buried ------------------
@@ -641,6 +656,13 @@ cat(sprintf("v-length mismatch  : %6d rows across %d filings\n",
             sum(L$len_mismatch), length(unique(L$wrdsfname[L$len_mismatch]))))
 cat(sprintf("amount NA but value present: %6d rows (scale unknown)\n",
             sum(is.na(L$amount) & !is.na(L$value_printed))))
+## printed more numbers than there are columns: the surplus is in row_printed,
+## not lost, but it usually means the column count was misread - worth looking
+## at the filing rather than trusting the row
+no <- L %>% filter(row_overcount) %>% distinct(wrdsfname, line_order)
+cat(sprintf("rows with surplus numbers: %6d across %d filings%s\n",
+            nrow(no), n_distinct(no$wrdsfname),
+            if (nrow(no)) " (see row_printed; re-check their column count)" else ""))
 
 ## ---- footing check ---------------------------------------------------------
 ## Only the cash flow statement has an arithmetic identity this clean:

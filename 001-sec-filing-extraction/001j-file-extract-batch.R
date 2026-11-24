@@ -40,6 +40,26 @@ if (!dir.exists(DIR)) stop("no such batch: ", DIR)
 man <- read_csv(paste0(DIR, "/manifest.csv"), show_col_types = FALSE,
                 col_types = cols(cik = col_character(), .default = col_guess()))
 
+## ---- 0. refuse to file the same filing twice under two batch names ---------
+## Each batch writes parquet named after itself, so re-filing the SAME batch
+## overwrites its own files and is how a correction is applied. Filing a
+## DIFFERENT batch that contains filings already in the store appends a second
+## copy instead: the same filing then appears twice, with different numbers,
+## and nothing downstream notices. Caught the hard way by filing a two-file
+## test batch and duplicating two filings out of the 500-statement wave.
+own <- length(Sys.glob(paste0(SD, "/rows/*/", BATCH, "-*.parquet"))) > 0
+if (!own && dir.exists(paste0(SD, "/rows"))) {
+  have <- tryCatch(open_dataset(paste0(SD, "/rows")) |> distinct(accession) |>
+                     collect() |> pull(accession), error = function(e) character())
+  dup <- intersect(man$accession, have)
+  if (length(dup) && !nzchar(Sys.getenv("FORCE")))
+    stop("batch '", BATCH, "' holds ", length(dup), " filing(s) already in the store ",
+         "under a different batch, e.g. ", paste(head(dup, 3), collapse = ", "),
+         ".\nFiling it would store each one twice. To correct a transcription, ",
+         "overwrite res/c###.json in the ORIGINAL batch and re-file THAT batch ",
+         "(001l prints the commands). Set FORCE=1 only if you mean to duplicate.")
+}
+
 ## ---- 1. assemble the model's JSON into one jsonl, metadata from manifest ---
 fs <- list.files(paste0(DIR, "/res"), pattern = "^c[0-9]+[.]json$", full.names = TRUE)
 cat("transcribed:", length(fs), "of", nrow(man), "\n")
